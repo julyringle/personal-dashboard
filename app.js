@@ -32,6 +32,7 @@ const RAFT_CONFIG={
 };
 
 function server(method,...args){
+  if(typeof window.dashboardRemoteRun==='function') return window.dashboardRemoteRun(method,args);
   return new Promise((resolve,reject)=>{
     try{
       const runner=google.script.run.withSuccessHandler(resolve).withFailureHandler(err=>reject(new Error(err && err.message ? err.message : String(err))));
