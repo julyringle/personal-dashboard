@@ -37,7 +37,7 @@ function updateClock(){const n=new Date();document.getElementById('clock').inner
 setInterval(updateClock,30000);updateClock();
 
 document.querySelectorAll('[data-route]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.route)));
-function navigate(route){STATE.route=route;document.querySelectorAll('[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===route));if(route==='habits')renderHabitsPage();else if(route==='collections')renderCollections();else renderHome();}
+function navigate(route){STATE.route=route;document.body.dataset.page=route;document.querySelectorAll('[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===route));if(route==='habits')renderHabitsPage();else if(route==='collections')renderCollections();else renderHome();}
 
 async function init(){
   try{STATE.bootstrap=await server('getBootstrapData');applyTheme();navigate(STATE.route);if(STATE.bootstrap.errors?.length)console.warn(STATE.bootstrap.errors)}catch(e){document.getElementById('app').innerHTML=`<div class="error">${esc(e.message)}</div>`}
