@@ -41,7 +41,8 @@ function doGet(e) {
     html = HtmlService.createHtmlOutputFromFile('Index').getContent();
   }
 
-  const initialView = (e && e.parameter && e.parameter.view === 'collections') ? 'collections' : 'home';
+  const requestedView = e && e.parameter ? String(e.parameter.view || '').toLowerCase() : '';
+  const initialView = ['home', 'habits', 'collections'].indexOf(requestedView) >= 0 ? requestedView : 'home';
   html = html.replace('__INITIAL_VIEW__', initialView);
 
   return HtmlService.createHtmlOutput(html)
@@ -211,17 +212,9 @@ function safeCalendarColor_(cal) {
 
 function safeEventColor_(ev, cal) {
   const colors = {
-    '1': '#A4BDFC', // Lavender
-    '2': '#7AE7BF', // Sage
-    '3': '#DBADFF', // Grape
-    '4': '#FF887C', // Flamingo
-    '5': '#FBD75B', // Banana
-    '6': '#FFB878', // Tangerine
-    '7': '#46D6DB', // Peacock
-    '8': '#E1E1E1', // Graphite
-    '9': '#5484ED', // Blueberry
-    '10': '#51B749', // Basil
-    '11': '#DC2127' // Tomato
+    '1': '#A4BDFC', '2': '#7AE7BF', '3': '#DBADFF', '4': '#FF887C',
+    '5': '#FBD75B', '6': '#FFB878', '7': '#46D6DB', '8': '#E1E1E1',
+    '9': '#5484ED', '10': '#51B749', '11': '#DC2127'
   };
   try {
     const eventColor = String(ev.getColor() || '');
@@ -381,6 +374,168 @@ function getHabits_() {
       logId: byCard[page.id] || null
     };
   }).filter(function(x) { return x.name && x.habitId; });
+}
+
+
+function getHabitDashboardData() {
+  const cards = notionQueryAll_(APP.DS.HABIT_CARDS, {
+    sorts: [{ property: 'Order', direction: 'ascending' }],
+    page_size: 100
+  });
+
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const currentMonday = mondayStart_(today);
+  currentMonday.setHours(12, 0, 0, 0);
+
+  const start = new Date(currentMonday);
+  start.setDate(start.getDate() - 84);
+  const end = new Date(currentMonday);
+  end.setDate(end.getDate() + 6);
+  const endExclusive = new Date(end);
+  endExclusive.setDate(endExclusive.getDate() + 1);
+
+  const startKey = Utilities.formatDate(start, APP.TZ, 'yyyy-MM-dd');
+  const endExclusiveKey = Utilities.formatDate(endExclusive, APP.TZ, 'yyyy-MM-dd');
+  const todayKey = Utilities.formatDate(today, APP.TZ, 'yyyy-MM-dd');
+
+  const habitCards = cards.map(function(page) {
+    const habitRel = notionRelationIds_(page.properties.Habit);
+    return {
+      cardId: page.id,
+      habitId: habitRel.length ? habitRel[0] : '',
+      name: notionText_(page.properties.Name),
+      color: notionSelect_(page.properties.Color) || '',
+      order: notionNumber_(page.properties.Order)
+    };
+  }).filter(function(x) { return x.name && x.habitId; });
+
+  const byCard = {};
+  const byHabit = {};
+  habitCards.forEach(function(card) {
+    byCard[card.cardId] = card;
+    byHabit[card.habitId] = card;
+  });
+
+  const logs = notionQueryAll_(APP.DS.HABIT_HISTORY, {
+    filter: {
+      and: [
+        { property: 'Date', date: { on_or_after: startKey } },
+        { property: 'Date', date: { before: endExclusiveKey } }
+      ]
+    },
+    page_size: 100
+  });
+
+  const completeByCard = {};
+  const completeByDay = {};
+
+  logs.forEach(function(log) {
+    const rawDate = notionDate_(log.properties.Date);
+    if (!rawDate) return;
+    const dateKey = Utilities.formatDate(new Date(rawDate), APP.TZ, 'yyyy-MM-dd');
+
+    let card = null;
+    const cardRel = notionRelationIds_(log.properties['Habit Card']);
+    if (cardRel.length) card = byCard[cardRel[0]] || null;
+    if (!card) {
+      const habitRel = notionRelationIds_(log.properties.Habit);
+      if (habitRel.length) card = byHabit[habitRel[0]] || null;
+    }
+    if (!card) return;
+
+    if (!completeByCard[card.cardId]) completeByCard[card.cardId] = {};
+    completeByCard[card.cardId][dateKey] = true;
+
+    if (!completeByDay[dateKey]) completeByDay[dateKey] = {};
+    completeByDay[dateKey][card.cardId] = card.name;
+  });
+
+  const days = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const key = Utilities.formatDate(cursor, APP.TZ, 'yyyy-MM-dd');
+    const dayMap = completeByDay[key] || {};
+    const names = Object.keys(dayMap).map(function(id) { return dayMap[id]; });
+    const future = key > todayKey;
+    const count = names.length;
+    const ratio = habitCards.length ? count / habitCards.length : 0;
+    days.push({
+      date: key,
+      count: count,
+      level: future ? -1 : (count === 0 ? 0 : Math.max(1, Math.min(4, Math.ceil(ratio * 4)))),
+      habits: names,
+      future: future
+    });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  const elapsedDays = days.filter(function(d) { return !d.future; }).length;
+  const currentMondayKey = Utilities.formatDate(currentMonday, APP.TZ, 'yyyy-MM-dd');
+
+  const habits = habitCards.map(function(card) {
+    const map = completeByCard[card.cardId] || {};
+    const dates = Object.keys(map).sort();
+
+    let currentStreak = 0;
+    const streakCursor = new Date(today);
+    let streakKey = Utilities.formatDate(streakCursor, APP.TZ, 'yyyy-MM-dd');
+    if (!map[streakKey]) {
+      streakCursor.setDate(streakCursor.getDate() - 1);
+      streakKey = Utilities.formatDate(streakCursor, APP.TZ, 'yyyy-MM-dd');
+    }
+    while (map[streakKey]) {
+      currentStreak++;
+      streakCursor.setDate(streakCursor.getDate() - 1);
+      streakKey = Utilities.formatDate(streakCursor, APP.TZ, 'yyyy-MM-dd');
+    }
+
+    let bestStreak = 0;
+    let run = 0;
+    days.forEach(function(day) {
+      if (day.future) return;
+      if (map[day.date]) {
+        run++;
+        if (run > bestStreak) bestStreak = run;
+      } else {
+        run = 0;
+      }
+    });
+
+    const thisWeek = dates.filter(function(d) {
+      return d >= currentMondayKey && d <= todayKey;
+    }).length;
+
+    return {
+      cardId: card.cardId,
+      habitId: card.habitId,
+      name: card.name,
+      color: card.color,
+      order: card.order,
+      completions: dates.length,
+      currentStreak: currentStreak,
+      bestStreak: bestStreak,
+      thisWeek: thisWeek,
+      rate: elapsedDays ? Math.round((dates.length / elapsedDays) * 100) : 0,
+      dates: dates
+    };
+  });
+
+  const totalCompletions = days.filter(function(d) { return !d.future; })
+    .reduce(function(sum, d) { return sum + d.count; }, 0);
+  const totalPossible = elapsedDays * habitCards.length;
+
+  return {
+    startDate: startKey,
+    endDate: Utilities.formatDate(end, APP.TZ, 'yyyy-MM-dd'),
+    today: todayKey,
+    habitCount: habitCards.length,
+    elapsedDays: elapsedDays,
+    totalCompletions: totalCompletions,
+    completionRate: totalPossible ? Math.round((totalCompletions / totalPossible) * 100) : 0,
+    days: days,
+    habits: habits
+  };
 }
 
 function toggleHabit(payload) {
