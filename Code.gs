@@ -1289,10 +1289,21 @@ function migrateOffNotion() {
   writeTableObjects_(ss,'Notes',notes);
 
   props.setProperty('DATA_BACKEND','sheets');
-  return {
+  const result={
     ok:true,backend:'sheets',spreadsheetId:ss.getId(),spreadsheetUrl:ss.getUrl(),
     counts:{settings:settings.length,tasks:tasks.length,projects:projects.length,health:health.length,habits:habits.length,habitHistory:history.length,notes:notes.length}
   };
+  Logger.log(JSON.stringify(result,null,2));
+  return result;
+}
+
+function validateSheetsBackend() {
+  const info=getDashboardDataStoreInfo();
+  const counts={};
+  Object.keys(DASHBOARD_TABLES).forEach(function(name){ counts[name]=sheetObjects_(name).length; });
+  const result={ok:useSheetsBackend_(),backend:info.backend,spreadsheetUrl:info.spreadsheetUrl,counts:counts};
+  Logger.log(JSON.stringify(result,null,2));
+  return result;
 }
 
 function rollbackToNotionBackend() {
