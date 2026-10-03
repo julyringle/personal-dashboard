@@ -2,6 +2,7 @@
   const CONFIG_KEY='pdStandaloneConfigV1';
   const TOKEN_KEY='pdStandaloneTokenV1';
   const DEFAULT_CLIENT_ID='768938791390-06nk1l8csltji5vsmah53oub1kninm1b.apps.googleusercontent.com';
+  const DEFAULT_SCRIPT_ID='1PzhUVJDtTUuoBiG6k5jamDylCbGisMfEjdkc71do4mU_i1qaeT0Y0OOQ';
   const SCOPES=[
     'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/spreadsheets',
@@ -19,8 +20,9 @@
   function savedConfig(){
     try{
       const x=JSON.parse(localStorage.getItem(CONFIG_KEY)||'null');
-      return x&&x.clientId&&x.scriptId?x:null;
-    }catch(e){return null}
+      if(x&&x.clientId&&x.scriptId) return x;
+    }catch(e){}
+    return {clientId:DEFAULT_CLIENT_ID,scriptId:DEFAULT_SCRIPT_ID};
   }
   function savedToken(){
     try{
@@ -56,31 +58,9 @@
     });
   }
   function ensureConfig(){
-    const existing=savedConfig();
-    if(existing) return Promise.resolve(existing);
-    if(configPromise) return configPromise;
-    configPromise=new Promise(resolve=>{
-      showCard(`
-        <div class="standalone-kicker">PRIVATE DASHBOARD // 初期設定</div>
-        <h1>Connect this device</h1>
-        <p>This one-time setup connects the standalone dashboard to your private Google Apps Script backend. These two IDs are not passwords.</p>
-        <label>OAuth client ID<input id="standaloneClientId" autocomplete="off" value="${DEFAULT_CLIENT_ID}" placeholder="...apps.googleusercontent.com"></label>
-        <label>Apps Script project Script ID<input id="standaloneScriptId" autocomplete="off" placeholder="Script ID from Apps Script Project Settings"></label>
-        <button id="standaloneSaveConfig" class="standalone-primary">SAVE & CONTINUE</button>
-        <div class="standalone-note">The IDs stay in this browser only. Your Sheets and Calendar data are not stored in GitHub.</div>
-      `);
-      const btn=document.getElementById('standaloneSaveConfig');
-      btn.onclick=()=>{
-        const clientId=document.getElementById('standaloneClientId').value.trim();
-        const scriptId=document.getElementById('standaloneScriptId').value.trim();
-        if(!clientId||!scriptId){alert('Enter both IDs first.');return}
-        const cfg={clientId,scriptId};
-        localStorage.setItem(CONFIG_KEY,JSON.stringify(cfg));
-        configPromise=null;
-        resolve(cfg);
-      };
-    });
-    return configPromise;
+    const cfg=savedConfig();
+    localStorage.setItem(CONFIG_KEY,JSON.stringify(cfg));
+    return Promise.resolve(cfg);
   }
   async function requestToken(cfg){
     await waitForGIS();
@@ -90,13 +70,8 @@
         <h1>Sign in to continue</h1>
         <p>Google authentication protects your Calendar, Sheets, habits, health, school, and project data.</p>
         <button id="standaloneGoogleSignIn" class="standalone-primary">SIGN IN WITH GOOGLE</button>
-        <button id="standaloneReset" class="standalone-secondary">CHANGE CONNECTION</button>
         <div class="standalone-note">Only the Google account authorized for the Apps Script API executable can load the dashboard.</div>
       `);
-      document.getElementById('standaloneReset').onclick=()=>{
-        localStorage.removeItem(CONFIG_KEY);sessionStorage.removeItem(TOKEN_KEY);
-        location.reload();
-      };
       document.getElementById('standaloneGoogleSignIn').onclick=()=>{
         const client=google.accounts.oauth2.initTokenClient({
           client_id:cfg.clientId,
