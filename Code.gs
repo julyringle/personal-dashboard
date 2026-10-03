@@ -105,7 +105,10 @@ function getBootstrapData() {
     now: new Date().toISOString(),
     timezone: APP.TZ,
     setup: {
-      notionConnected: !!PropertiesService.getScriptProperties().getProperty('NOTION_TOKEN')
+      notionConnected: !!PropertiesService.getScriptProperties().getProperty('NOTION_TOKEN'),
+      backend: useSheetsBackend_() ? 'sheets' : 'notion',
+      dataReady: useSheetsBackend_() || !!PropertiesService.getScriptProperties().getProperty('NOTION_TOKEN'),
+      dataStoreUrl: useSheetsBackend_() ? dashboardSpreadsheet_().getUrl() : ''
     },
     settings: [],
     calendar: null,
@@ -121,7 +124,7 @@ function getBootstrapData() {
   try { out.settings = getDashboardSettings_(); } catch (e) { errors.push('settings: ' + e.message); }
   try { out.calendar = getCalendarWeek(0); } catch (e) { errors.push('calendar: ' + e.message); }
 
-  if (out.setup.notionConnected) {
+  if (out.setup.dataReady) {
     try { out.focus = getFocusTasks_(); } catch (e) { errors.push('focus: ' + e.message); }
     try { out.habits = getHabits_(); } catch (e) { errors.push('habits: ' + e.message); }
     try { out.health = getHealthSummary_(); } catch (e) { errors.push('health: ' + e.message); }
@@ -135,6 +138,7 @@ function getBootstrapData() {
 }
 
 function getDashboardSettings_() {
+  if (useSheetsBackend_()) return getDashboardSettingsSheet_();
   const rows = notionQueryAll_(APP.DS.SETTINGS, {
     sorts: [{ property: 'Order', direction: 'ascending' }],
     page_size: 100
@@ -246,6 +250,7 @@ function mondayStart_(date) {
 }
 
 function getFocusTasks_() {
+  if (useSheetsBackend_()) return getFocusTasksSheet_();
   const rows = notionQueryAll_(APP.DS.TASKS, {
     filter: {
       and: [
@@ -263,6 +268,7 @@ function getFocusTasks_() {
 }
 
 function getSchoolSummary_() {
+  if (useSheetsBackend_()) return getSchoolSummarySheet_();
   const rows = notionQueryAll_(APP.DS.TASKS, {
     filter: {
       and: [
@@ -294,6 +300,7 @@ function taskFromNotion_(page) {
 }
 
 function getProjectsSummary_() {
+  if (useSheetsBackend_()) return getProjectsSummarySheet_();
   const rows = notionQueryAll_(APP.DS.PROJECTS, {
     filter: { property: 'Status', select: { equals: 'Active' } },
     page_size: 20
@@ -315,6 +322,7 @@ function getProjectsSummary_() {
 }
 
 function getProjectTasks_() {
+  if (useSheetsBackend_()) return getProjectTasksSheet_();
   const rows = notionQueryAll_(APP.DS.TASKS, {
     filter: {
       and: [
@@ -331,6 +339,7 @@ function getProjectTasks_() {
 }
 
 function getHealthSummary_() {
+  if (useSheetsBackend_()) return getHealthSummarySheet_();
   const rows = notionQueryAll_(APP.DS.CHECKINS, {
     filter: { property: 'Type', select: { equals: 'Daily Check-In' } },
     sorts: [{ property: 'Date', direction: 'descending' }],
@@ -367,6 +376,7 @@ function getHealthSummary_() {
 }
 
 function getHabits_() {
+  if (useSheetsBackend_()) return getHabitsSheet_();
   const cards = notionQueryAll_(APP.DS.HABIT_CARDS, {
     sorts: [{ property: 'Order', direction: 'ascending' }],
     page_size: 100
@@ -409,6 +419,7 @@ function getHabits_() {
 
 
 function getHabitDashboardData() {
+  if (useSheetsBackend_()) return getHabitDashboardDataSheet_();
   const cards = notionQueryAll_(APP.DS.HABIT_CARDS, {
     sorts: [{ property: 'Order', direction: 'ascending' }],
     page_size: 100
@@ -570,6 +581,7 @@ function getHabitDashboardData() {
 }
 
 function toggleHabit(payload) {
+  if (useSheetsBackend_()) return toggleHabitSheet_(payload);
   if (!payload || !payload.cardId || !payload.habitId) throw new Error('Habit identity missing.');
 
   if (payload.logId) {
@@ -593,6 +605,7 @@ function toggleHabit(payload) {
 }
 
 function createQuickItem(type, payload) {
+  if (useSheetsBackend_() && String(type || '').toLowerCase() !== 'wishlist') return createQuickItemSheet_(type, payload);
   payload = payload || {};
   type = String(type || '').toLowerCase();
 
@@ -825,6 +838,473 @@ function unique_(arr) {
     return true;
   });
 }
+
+
+const DASHBOARD_TABLES = Object.freeze({
+  Settings: ['Setting','Group','Value','Number','Enabled','Order','Accent','Japanese','Notes'],
+  Tasks: ['ID','Task','Status','Priority','Area','Due','Done','Details','Course','Source URL'],
+  Projects: ['ID','Name','Status','Phase','Priority','Progress','Target Date','Summary','Area','Budget','Source URL'],
+  Health: ['ID','Date','Type','Morning Weight (lb)','Sleep Hours','Sleep Score','HRV','Resting HR','Steps','Protein (g)','Body Battery','Energy','Stress','Soreness','Mood'],
+  Habits: ['Card ID','Habit ID','Name','Color','Order','Active'],
+  HabitHistory: ['ID','Date','Habit Card ID','Habit ID','Habit Name'],
+  Notes: ['ID','Title','Area','Status','Type','Date','Body','Source URL']
+});
+
+function useSheetsBackend_() {
+  return PropertiesService.getScriptProperties().getProperty('DATA_BACKEND') === 'sheets';
+}
+
+function dashboardSpreadsheet_() {
+  const id = PropertiesService.getScriptProperties().getProperty('DASHBOARD_DATA_SHEET_ID');
+  if (!id) throw new Error('Dashboard data sheet has not been created yet.');
+  return SpreadsheetApp.openById(id);
+}
+
+function createDashboardDataStore_() {
+  const props = PropertiesService.getScriptProperties();
+  const existing = props.getProperty('DASHBOARD_DATA_SHEET_ID');
+  let ss = null;
+  if (existing) {
+    try { ss = SpreadsheetApp.openById(existing); } catch (e) {}
+  }
+  if (!ss) {
+    ss = SpreadsheetApp.create('Personal Dashboard Data');
+    props.setProperty('DASHBOARD_DATA_SHEET_ID', ss.getId());
+  }
+  ensureDashboardSheets_(ss);
+  return ss;
+}
+
+function ensureDashboardSheets_(ss) {
+  const names = Object.keys(DASHBOARD_TABLES);
+  const first = ss.getSheets()[0];
+  if (first && names.indexOf(first.getName()) < 0 && first.getLastRow() === 0) first.setName(names[0]);
+
+  names.forEach(function(name) {
+    let sh = ss.getSheetByName(name);
+    if (!sh) sh = ss.insertSheet(name);
+    const headers = DASHBOARD_TABLES[name];
+    if (sh.getMaxColumns() < headers.length) sh.insertColumnsAfter(sh.getMaxColumns(), headers.length - sh.getMaxColumns());
+    if (sh.getLastRow() === 0) {
+      sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+    } else {
+      const current = sh.getRange(1, 1, 1, headers.length).getDisplayValues()[0];
+      if (current.join('|') !== headers.join('|')) sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+    }
+    sh.setFrozenRows(1);
+    sh.getRange(1,1,1,headers.length).setFontWeight('bold').setBackground('#171B20').setFontColor('#E5E2DC');
+  });
+}
+
+function sheetObjects_(name) {
+  const sh = dashboardSpreadsheet_().getSheetByName(name);
+  if (!sh || sh.getLastRow() < 2) return [];
+  const values = sh.getDataRange().getValues();
+  const headers = values[0].map(String);
+  return values.slice(1).filter(function(row) {
+    return row.some(function(v) { return v !== '' && v !== null; });
+  }).map(function(row) {
+    const obj = {};
+    headers.forEach(function(h, i) { obj[h] = row[i]; });
+    obj.__row = row;
+    return obj;
+  });
+}
+
+function writeTableObjects_(ss, name, objects) {
+  ensureDashboardSheets_(ss);
+  const sh = ss.getSheetByName(name);
+  const headers = DASHBOARD_TABLES[name];
+  sh.clearContents();
+  sh.getRange(1,1,1,headers.length).setValues([headers]).setFontWeight('bold').setBackground('#171B20').setFontColor('#E5E2DC');
+  if (objects.length) {
+    const rows = objects.map(function(obj) {
+      return headers.map(function(h) {
+        const v = obj[h];
+        return v === undefined || v === null ? '' : v;
+      });
+    });
+    sh.getRange(2,1,rows.length,headers.length).setValues(rows);
+  }
+  sh.setFrozenRows(1);
+  try { sh.autoResizeColumns(1, Math.min(headers.length, 12)); } catch (e) {}
+}
+
+function appendTableObject_(name, obj) {
+  const ss = dashboardSpreadsheet_();
+  const sh = ss.getSheetByName(name);
+  const headers = DASHBOARD_TABLES[name];
+  sh.appendRow(headers.map(function(h) {
+    const v = obj[h];
+    return v === undefined || v === null ? '' : v;
+  }));
+}
+
+function truthySheet_(v) {
+  return v === true || String(v).toUpperCase() === 'TRUE' || String(v) === '1';
+}
+
+function numOrNull_(v) {
+  if (v === '' || v === null || v === undefined) return null;
+  const n = Number(v);
+  return isFinite(n) ? n : null;
+}
+
+function dateKeySheet_(v) {
+  if (!v) return '';
+  const d = v instanceof Date ? v : new Date(v);
+  if (isNaN(d)) return String(v).slice(0,10);
+  return Utilities.formatDate(d, APP.TZ, 'yyyy-MM-dd');
+}
+
+function taskFromSheet_(r) {
+  return {
+    id: String(r['ID'] || ''),
+    url: '',
+    title: String(r['Task'] || ''),
+    status: String(r['Status'] || ''),
+    priority: String(r['Priority'] || ''),
+    area: String(r['Area'] || ''),
+    due: r['Due'] ? dateKeySheet_(r['Due']) : null,
+    done: truthySheet_(r['Done']),
+    details: String(r['Details'] || ''),
+    course: String(r['Course'] || '')
+  };
+}
+
+function getDashboardSettingsSheet_() {
+  return sheetObjects_('Settings').map(function(r) {
+    return {
+      id: '',
+      setting: String(r['Setting'] || ''),
+      group: String(r['Group'] || ''),
+      value: String(r['Value'] || ''),
+      number: numOrNull_(r['Number']),
+      enabled: truthySheet_(r['Enabled']),
+      order: numOrNull_(r['Order']),
+      accent: String(r['Accent'] || ''),
+      japanese: String(r['Japanese'] || ''),
+      notes: String(r['Notes'] || '')
+    };
+  }).sort(function(a,b){ return (a.order || 9999) - (b.order || 9999); });
+}
+
+function openTaskRowsSheet_() {
+  return sheetObjects_('Tasks').map(taskFromSheet_).filter(function(t) {
+    return t.title && !t.done && t.status !== 'Done' && t.status !== 'Archived';
+  });
+}
+
+function getFocusTasksSheet_() {
+  return openTaskRowsSheet_().filter(function(t) { return !!t.due; }).sort(function(a,b) {
+    return String(a.due).localeCompare(String(b.due));
+  }).slice(0,25);
+}
+
+function getSchoolSummarySheet_() {
+  return openTaskRowsSheet_().filter(function(t) { return t.area === 'School'; }).sort(function(a,b) {
+    return String(a.due || '9999').localeCompare(String(b.due || '9999'));
+  }).slice(0,50);
+}
+
+function getProjectTasksSheet_() {
+  return openTaskRowsSheet_().filter(function(t) { return t.area === 'Projects'; }).sort(function(a,b) {
+    return String(a.due || '9999').localeCompare(String(b.due || '9999'));
+  }).slice(0,50);
+}
+
+function projectFromSheet_(r) {
+  return {
+    id: String(r['ID'] || ''),
+    url: '',
+    name: String(r['Name'] || ''),
+    status: String(r['Status'] || ''),
+    phase: String(r['Phase'] || ''),
+    priority: String(r['Priority'] || ''),
+    progress: numOrNull_(r['Progress']),
+    targetDate: r['Target Date'] ? dateKeySheet_(r['Target Date']) : null,
+    summary: String(r['Summary'] || ''),
+    area: String(r['Area'] || ''),
+    budget: numOrNull_(r['Budget'])
+  };
+}
+
+function getProjectsSummarySheet_() {
+  return sheetObjects_('Projects').map(projectFromSheet_).filter(function(p) {
+    return p.name && p.status === 'Active';
+  });
+}
+
+function healthFromSheet_(r) {
+  return {
+    date: r['Date'] ? dateKeySheet_(r['Date']) : null,
+    weight: numOrNull_(r['Morning Weight (lb)']),
+    sleepHours: numOrNull_(r['Sleep Hours']),
+    sleepScore: numOrNull_(r['Sleep Score']),
+    hrv: numOrNull_(r['HRV']),
+    restingHR: numOrNull_(r['Resting HR']),
+    steps: numOrNull_(r['Steps']),
+    protein: numOrNull_(r['Protein (g)']),
+    bodyBattery: numOrNull_(r['Body Battery']),
+    energy: numOrNull_(r['Energy']),
+    stress: numOrNull_(r['Stress']),
+    soreness: numOrNull_(r['Soreness']),
+    mood: String(r['Mood'] || '')
+  };
+}
+
+function getHealthSummarySheet_() {
+  const data = sheetObjects_('Health').filter(function(r) {
+    return !r['Type'] || String(r['Type']) === 'Daily Check-In';
+  }).map(healthFromSheet_).filter(function(x) { return x.date; }).sort(function(a,b) {
+    return String(b.date).localeCompare(String(a.date));
+  });
+  if (!data.length) return null;
+  const latest = data[0];
+  const oldestWeight = data.slice().reverse().find(function(x) { return x.weight !== null; });
+  const latestWeight = data.find(function(x) { return x.weight !== null; });
+  return {
+    latest: latest,
+    weightTrend30d: latestWeight && oldestWeight ? round1_(latestWeight.weight - oldestWeight.weight) : null,
+    series: data.slice().reverse()
+  };
+}
+
+function getHabitsSheet_() {
+  const habits = sheetObjects_('Habits').filter(function(r) {
+    return r['Name'] && (r['Active'] === '' || truthySheet_(r['Active']));
+  }).sort(function(a,b){ return (Number(a['Order']) || 9999) - (Number(b['Order']) || 9999); });
+  const today = Utilities.formatDate(new Date(), APP.TZ, 'yyyy-MM-dd');
+  const logs = sheetObjects_('HabitHistory').filter(function(r) { return dateKeySheet_(r['Date']) === today; });
+  const byCard = {};
+  logs.forEach(function(r) { if (r['Habit Card ID']) byCard[String(r['Habit Card ID'])] = String(r['ID'] || ''); });
+  return habits.map(function(r) {
+    const cardId = String(r['Card ID'] || '');
+    return {
+      cardId: cardId,
+      habitId: String(r['Habit ID'] || cardId),
+      name: String(r['Name'] || ''),
+      order: numOrNull_(r['Order']),
+      color: String(r['Color'] || ''),
+      done: !!byCard[cardId],
+      logId: byCard[cardId] || null
+    };
+  });
+}
+
+function buildHabitDashboardFromSheet_() {
+  const habitRows = sheetObjects_('Habits').filter(function(r) {
+    return r['Name'] && (r['Active'] === '' || truthySheet_(r['Active']));
+  }).sort(function(a,b){ return (Number(a['Order']) || 9999) - (Number(b['Order']) || 9999); });
+  const habitCards = habitRows.map(function(r) {
+    return {
+      cardId: String(r['Card ID'] || ''),
+      habitId: String(r['Habit ID'] || r['Card ID'] || ''),
+      name: String(r['Name'] || ''),
+      color: String(r['Color'] || ''),
+      order: numOrNull_(r['Order'])
+    };
+  });
+
+  const today = new Date(); today.setHours(12,0,0,0);
+  const currentMonday = mondayStart_(today); currentMonday.setHours(12,0,0,0);
+  const start = new Date(currentMonday); start.setDate(start.getDate()-84);
+  const end = new Date(currentMonday); end.setDate(end.getDate()+6);
+  const startKey = Utilities.formatDate(start, APP.TZ, 'yyyy-MM-dd');
+  const todayKey = Utilities.formatDate(today, APP.TZ, 'yyyy-MM-dd');
+
+  const byCard = {}, byHabit = {};
+  habitCards.forEach(function(card){ byCard[card.cardId]=card; byHabit[card.habitId]=card; });
+
+  const completeByCard = {}, completeByDay = {};
+  sheetObjects_('HabitHistory').forEach(function(r) {
+    const dateKey = dateKeySheet_(r['Date']);
+    if (!dateKey || dateKey < startKey || dateKey > Utilities.formatDate(end, APP.TZ, 'yyyy-MM-dd')) return;
+    const card = byCard[String(r['Habit Card ID'] || '')] || byHabit[String(r['Habit ID'] || '')];
+    if (!card) return;
+    if (!completeByCard[card.cardId]) completeByCard[card.cardId] = {};
+    completeByCard[card.cardId][dateKey] = true;
+    if (!completeByDay[dateKey]) completeByDay[dateKey] = {};
+    completeByDay[dateKey][card.cardId] = card.name;
+  });
+
+  const days=[], cursor=new Date(start);
+  while(cursor<=end){
+    const key=Utilities.formatDate(cursor,APP.TZ,'yyyy-MM-dd');
+    const dayMap=completeByDay[key]||{},names=Object.keys(dayMap).map(function(id){return dayMap[id];});
+    const future=key>todayKey,count=names.length,ratio=habitCards.length?count/habitCards.length:0;
+    days.push({date:key,count:count,level:future?-1:(count===0?0:Math.max(1,Math.min(4,Math.ceil(ratio*4)))),habits:names,future:future});
+    cursor.setDate(cursor.getDate()+1);
+  }
+
+  const elapsedDays=days.filter(function(d){return !d.future;}).length;
+  const currentMondayKey=Utilities.formatDate(currentMonday,APP.TZ,'yyyy-MM-dd');
+  const habits=habitCards.map(function(card){
+    const map=completeByCard[card.cardId]||{},dates=Object.keys(map).sort();
+    let currentStreak=0,streakCursor=new Date(today),streakKey=Utilities.formatDate(streakCursor,APP.TZ,'yyyy-MM-dd');
+    if(!map[streakKey]){streakCursor.setDate(streakCursor.getDate()-1);streakKey=Utilities.formatDate(streakCursor,APP.TZ,'yyyy-MM-dd');}
+    while(map[streakKey]){currentStreak++;streakCursor.setDate(streakCursor.getDate()-1);streakKey=Utilities.formatDate(streakCursor,APP.TZ,'yyyy-MM-dd');}
+    let bestStreak=0,run=0;
+    days.forEach(function(day){if(day.future)return;if(map[day.date]){run++;if(run>bestStreak)bestStreak=run;}else run=0;});
+    const thisWeek=dates.filter(function(d){return d>=currentMondayKey&&d<=todayKey;}).length;
+    return {cardId:card.cardId,habitId:card.habitId,name:card.name,color:card.color,order:card.order,completions:dates.length,currentStreak:currentStreak,bestStreak:bestStreak,thisWeek:thisWeek,rate:elapsedDays?Math.round((dates.length/elapsedDays)*100):0,dates:dates};
+  });
+  const totalCompletions=days.filter(function(d){return !d.future;}).reduce(function(sum,d){return sum+d.count;},0);
+  const totalPossible=elapsedDays*habitCards.length;
+  return {startDate:startKey,endDate:Utilities.formatDate(end,APP.TZ,'yyyy-MM-dd'),today:todayKey,habitCount:habitCards.length,elapsedDays:elapsedDays,totalCompletions:totalCompletions,completionRate:totalPossible?Math.round((totalCompletions/totalPossible)*100):0,days:days,habits:habits};
+}
+
+function getHabitDashboardDataSheet_() {
+  return buildHabitDashboardFromSheet_();
+}
+
+function toggleHabitSheet_(payload) {
+  if (!payload || !payload.cardId) throw new Error('Habit identity missing.');
+  const ss = dashboardSpreadsheet_(), sh = ss.getSheetByName('HabitHistory');
+  if (payload.logId) {
+    const values = sh.getDataRange().getValues();
+    for (let i=1;i<values.length;i++) {
+      if (String(values[i][0]) === String(payload.logId)) {
+        sh.deleteRow(i+1);
+        return {done:false,logId:null};
+      }
+    }
+    return {done:false,logId:null};
+  }
+  const habits = sheetObjects_('Habits');
+  const h = habits.find(function(r){ return String(r['Card ID']) === String(payload.cardId); });
+  if (!h) throw new Error('Habit not found.');
+  const id = Utilities.getUuid();
+  appendTableObject_('HabitHistory',{
+    'ID':id,
+    'Date':Utilities.formatDate(new Date(),APP.TZ,'yyyy-MM-dd'),
+    'Habit Card ID':String(h['Card ID']||''),
+    'Habit ID':String(h['Habit ID']||''),
+    'Habit Name':String(h['Name']||'')
+  });
+  return {done:true,logId:id};
+}
+
+function createQuickItemSheet_(type, payload) {
+  payload = payload || {}; type = String(type || '').toLowerCase();
+  if (type === 'task' || type === 'school_task') {
+    const title=String(payload.title||'').trim(); if(!title)throw new Error('Task title is required.');
+    appendTableObject_('Tasks',{
+      'ID':Utilities.getUuid(),'Task':title,'Status':'Inbox','Priority':payload.priority||'',
+      'Area':type==='school_task'?'School':(payload.area||'Personal'),'Due':payload.due||'',
+      'Done':false,'Details':payload.details||'','Course':payload.course||'','Source URL':''
+    });
+    return {ok:true};
+  }
+  if (type === 'note') {
+    const title=String(payload.title||'').trim(); if(!title)throw new Error('Note title is required.');
+    appendTableObject_('Notes',{
+      'ID':Utilities.getUuid(),'Title':title,'Area':payload.area||'Personal','Status':'Draft',
+      'Type':payload.noteType||'Reference','Date':Utilities.formatDate(new Date(),APP.TZ,'yyyy-MM-dd'),
+      'Body':payload.body||'','Source URL':''
+    });
+    return {ok:true};
+  }
+  throw new Error('Unknown quick-capture type.');
+}
+
+function notionBlockText_(pageId) {
+  try {
+    const res = notionRequest_('/v1/blocks/' + pageId + '/children?page_size=100','get');
+    return (res.results||[]).map(function(b){
+      const obj=b[b.type]||{},rt=obj.rich_text||[];
+      return rt.map(function(x){return x.plain_text||(x.text&&x.text.content)||'';}).join('');
+    }).filter(Boolean).join('\n');
+  } catch (e) { return ''; }
+}
+
+function migrateOffNotion() {
+  const props=PropertiesService.getScriptProperties();
+  if (!props.getProperty('NOTION_TOKEN')) throw new Error('NOTION_TOKEN is required for the one-time migration.');
+  const ss=createDashboardDataStore_();
+
+  const settings=getDashboardSettings_().map(function(x){return {
+    'Setting':x.setting,'Group':x.group,'Value':x.value,'Number':x.number,'Enabled':x.enabled,
+    'Order':x.order,'Accent':x.accent,'Japanese':x.japanese,'Notes':x.notes
+  };});
+
+  const taskPages=notionQueryAll_(APP.DS.TASKS,{page_size:100});
+  const tasks=taskPages.map(function(page){
+    const t=taskFromNotion_(page);return {
+      'ID':page.id,'Task':t.title,'Status':t.status,'Priority':t.priority,'Area':t.area,
+      'Due':t.due||'','Done':t.done,'Details':t.details,'Course':t.course||'','Source URL':page.url||''
+    };
+  });
+
+  const projectPages=notionQueryAll_(APP.DS.PROJECTS,{page_size:100});
+  const projects=projectPages.map(function(page){return {
+    'ID':page.id,'Name':notionText_(page.properties.Name),'Status':notionSelect_(page.properties.Status),
+    'Phase':notionSelect_(page.properties.Phase),'Priority':notionSelect_(page.properties.Priority),
+    'Progress':notionNumber_(page.properties.Progress),'Target Date':notionDate_(page.properties['Target Date'])||'',
+    'Summary':notionText_(page.properties.Summary),'Area':notionSelect_(page.properties.Area),
+    'Budget':notionNumber_(page.properties.Budget),'Source URL':page.url||''
+  };});
+
+  const healthPages=notionQueryAll_(APP.DS.CHECKINS,{page_size:100});
+  const health=healthPages.map(function(page){return {
+    'ID':page.id,'Date':notionDate_(page.properties.Date)||'','Type':notionSelect_(page.properties.Type),
+    'Morning Weight (lb)':notionNumber_(page.properties['Morning Weight (lb)']),
+    'Sleep Hours':notionNumber_(page.properties['Sleep Hours']),'Sleep Score':notionNumber_(page.properties['Sleep Score']),
+    'HRV':notionNumber_(page.properties.HRV),'Resting HR':notionNumber_(page.properties['Resting HR']),
+    'Steps':notionNumber_(page.properties.Steps),'Protein (g)':notionNumber_(page.properties['Protein (g)']),
+    'Body Battery':notionNumber_(page.properties['Body Battery']),'Energy':notionNumber_(page.properties.Energy),
+    'Stress':notionNumber_(page.properties.Stress),'Soreness':notionNumber_(page.properties.Soreness),
+    'Mood':notionSelect_(page.properties.Mood)
+  };});
+
+  const cardPages=notionQueryAll_(APP.DS.HABIT_CARDS,{sorts:[{property:'Order',direction:'ascending'}],page_size:100});
+  const habits=cardPages.map(function(page){
+    const rel=notionRelationIds_(page.properties.Habit);
+    return {'Card ID':page.id,'Habit ID':rel[0]||'','Name':notionText_(page.properties.Name),
+      'Color':notionSelect_(page.properties.Color),'Order':notionNumber_(page.properties.Order),'Active':true};
+  }).filter(function(x){return x['Name']&&x['Habit ID'];});
+  const byCard={},byHabit={};habits.forEach(function(h){byCard[h['Card ID']]=h;byHabit[h['Habit ID']]=h;});
+
+  const logPages=notionQueryAll_(APP.DS.HABIT_HISTORY,{page_size:100});
+  const history=logPages.map(function(page){
+    const cardRel=notionRelationIds_(page.properties['Habit Card']),habitRel=notionRelationIds_(page.properties.Habit);
+    const cardId=cardRel[0]||'',habitId=habitRel[0]||'',h=byCard[cardId]||byHabit[habitId]||{};
+    return {'ID':page.id,'Date':notionDate_(page.properties.Date)||'','Habit Card ID':cardId||h['Card ID']||'',
+      'Habit ID':habitId||h['Habit ID']||'','Habit Name':h['Name']||notionText_(page.properties.Name)||''};
+  }).filter(function(x){return x['Date'];});
+
+  const notePages=notionQueryAll_(APP.DS.NOTES,{page_size:100});
+  const notes=notePages.map(function(page){return {
+    'ID':page.id,'Title':notionText_(page.properties.Title),'Area':notionSelect_(page.properties.Area),
+    'Status':notionSelect_(page.properties.Status),'Type':notionSelect_(page.properties.Type),
+    'Date':notionDate_(page.properties.Date)||'','Body':notionBlockText_(page.id),'Source URL':page.url||''
+  };});
+
+  writeTableObjects_(ss,'Settings',settings);
+  writeTableObjects_(ss,'Tasks',tasks);
+  writeTableObjects_(ss,'Projects',projects);
+  writeTableObjects_(ss,'Health',health);
+  writeTableObjects_(ss,'Habits',habits);
+  writeTableObjects_(ss,'HabitHistory',history);
+  writeTableObjects_(ss,'Notes',notes);
+
+  props.setProperty('DATA_BACKEND','sheets');
+  return {
+    ok:true,backend:'sheets',spreadsheetId:ss.getId(),spreadsheetUrl:ss.getUrl(),
+    counts:{settings:settings.length,tasks:tasks.length,projects:projects.length,health:health.length,habits:habits.length,habitHistory:history.length,notes:notes.length}
+  };
+}
+
+function rollbackToNotionBackend() {
+  PropertiesService.getScriptProperties().deleteProperty('DATA_BACKEND');
+  return {ok:true,backend:'notion'};
+}
+
+function getDashboardDataStoreInfo() {
+  const props=PropertiesService.getScriptProperties(),id=props.getProperty('DASHBOARD_DATA_SHEET_ID');
+  return {backend:useSheetsBackend_()?'sheets':'notion',spreadsheetId:id||'',spreadsheetUrl:id?SpreadsheetApp.openById(id).getUrl():''};
+}
+
 
 function notionRequest_(path, method, body) {
   const token = PropertiesService.getScriptProperties().getProperty('NOTION_TOKEN');
