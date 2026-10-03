@@ -42,7 +42,7 @@ function doGet(e) {
   }
 
   const requestedView = e && e.parameter ? String(e.parameter.view || '').toLowerCase() : '';
-  const initialView = ['home', 'habits', 'collections'].indexOf(requestedView) >= 0 ? requestedView : 'home';
+  const initialView = ['home', 'habits', 'health', 'school', 'projects', 'collections'].indexOf(requestedView) >= 0 ? requestedView : 'home';
   html = html.replace('__INITIAL_VIEW__', initialView);
 
   return HtmlService.createHtmlOutput(html)
@@ -113,7 +113,8 @@ function getBootstrapData() {
     habits: [],
     health: null,
     school: [],
-    projects: []
+    projects: [],
+    projectTasks: []
   };
 
   const errors = [];
@@ -126,6 +127,7 @@ function getBootstrapData() {
     try { out.health = getHealthSummary_(); } catch (e) { errors.push('health: ' + e.message); }
     try { out.school = getSchoolSummary_(); } catch (e) { errors.push('school: ' + e.message); }
     try { out.projects = getProjectsSummary_(); } catch (e) { errors.push('projects: ' + e.message); }
+    try { out.projectTasks = getProjectTasks_(); } catch (e) { errors.push('project tasks: ' + e.message); }
   }
 
   out.errors = errors;
@@ -178,7 +180,8 @@ function getCalendarWeek(weekOffset) {
         allDay: ev.isAllDayEvent(),
         calendar: cal.getName(),
         color: safeEventColor_(ev, cal),
-        location: ev.getLocation() || ''
+        location: ev.getLocation() || '',
+        url: calendarEventUrl_(ev, cal)
       });
     });
   });
@@ -221,6 +224,16 @@ function safeEventColor_(ev, cal) {
     if (colors[eventColor]) return colors[eventColor];
   } catch (e) {}
   return safeCalendarColor_(cal);
+}
+
+function calendarEventUrl_(ev, cal) {
+  try {
+    const payload = String(ev.getId() || '') + ' ' + String(cal.getId() || '');
+    const eid = Utilities.base64EncodeWebSafe(payload).replace(/=+$/g, '');
+    return 'https://calendar.google.com/calendar/u/0/r/eventedit?eid=' + encodeURIComponent(eid);
+  } catch (e) {
+    return 'https://calendar.google.com/calendar/u/0/r';
+  }
 }
 
 function mondayStart_(date) {
@@ -275,7 +288,8 @@ function taskFromNotion_(page) {
     area: notionSelect_(page.properties.Area),
     due: notionDate_(page.properties.Due),
     done: notionCheckbox_(page.properties.Done),
-    details: notionText_(page.properties.Details)
+    details: notionText_(page.properties.Details),
+    course: notionSelect_(page.properties.Course) || notionText_(page.properties.Course)
   };
 }
 
@@ -294,9 +308,26 @@ function getProjectsSummary_() {
       progress: notionNumber_(page.properties.Progress),
       targetDate: notionDate_(page.properties['Target Date']),
       summary: notionText_(page.properties.Summary),
-      area: notionSelect_(page.properties.Area)
+      area: notionSelect_(page.properties.Area),
+      budget: notionNumber_(page.properties.Budget)
     };
   }).filter(function(x) { return x.name; });
+}
+
+function getProjectTasks_() {
+  const rows = notionQueryAll_(APP.DS.TASKS, {
+    filter: {
+      and: [
+        { property: 'Area', select: { equals: 'Projects' } },
+        { property: 'Status', select: { does_not_equal: 'Done' } },
+        { property: 'Status', select: { does_not_equal: 'Archived' } },
+        { property: 'Done', checkbox: { equals: false } }
+      ]
+    },
+    sorts: [{ property: 'Due', direction: 'ascending' }],
+    page_size: 30
+  });
+  return rows.map(taskFromNotion_).filter(function(x) { return x.title; });
 }
 
 function getHealthSummary_() {
