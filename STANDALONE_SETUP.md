@@ -28,7 +28,7 @@ https://julyringle.github.io/personal-dashboard/
 5. In Apps Script → Project Settings, link the script to the same standard Google Cloud project. Google asks for the Cloud project **number**, not the project ID.
 6. Apps Script → Deploy → New deployment → **API executable**.
 7. Set access to only yourself / the authorized user and deploy.
-8. Copy the API executable deployment ID.
+8. You do not need the Apps Script project Script ID for the browser call. The Apps Script API `scripts.run` endpoint uses the script project's **Script ID**. Find it in Apps Script → Project Settings → IDs → Script ID.
 
 ## First standalone launch
 
@@ -37,7 +37,7 @@ https://julyringle.github.io/personal-dashboard/
 
 The first time on a device, enter:
 - OAuth Client ID
-- API executable deployment ID
+- Apps Script project Script ID
 
 Then tap **Sign in with Google**.
 
