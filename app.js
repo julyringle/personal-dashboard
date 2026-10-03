@@ -119,10 +119,135 @@ async function renderHabitsPage(){
 }
 function renderHabitDashboard(data){
   const root=document.getElementById('app');
-  const overall=`<section class="habit-overall"><div class="heatmap-title-row"><div><div class="heatmap-label">ALL HABITS // 全体</div><div class="panel-sub">LAST 13 WEEKS</div></div><div class="panel-sub">${data.totalCompletions} COMPLETIONS</div></div>${habitHeatmap(data.days,null,'ALL HABITS')}<div class="habit-day-detail" id="habitDayDetail">CLICK A SQUARE TO SEE THAT DAY</div></section>`;
-  const cards=(data.habits||[]).map(h=>{const set=new Set(h.dates||[]);return `<section class="habit-analytics-card" style="--habit-accent:${HABIT_COLORS[h.color]||'#8e3e42'}"><div class="habit-card-head"><div class="habit-card-name">${esc(h.name)}</div><div class="habit-card-rate">${h.rate}% // 13W</div></div><div class="habit-stat-row"><div class="habit-stat"><b>${h.currentStreak}</b><span>CURRENT STREAK</span></div><div class="habit-stat"><b>${h.bestStreak}</b><span>BEST STREAK</span></div><div class="habit-stat"><b>${h.thisWeek}</b><span>THIS WEEK</span></div><div class="habit-stat"><b>${h.completions}</b><span>COMPLETIONS</span></div></div>${habitHeatmap(data.days,set,h.name)}</section>`}).join('');
-  root.innerHTML=`<div class="habits-page-head"><div><div class="page-title">HABITS // 習慣</div><div class="panel-sub" style="margin-top:5px">LOG ON HOME · REVIEW HERE</div></div><button class="ghost-btn" id="refreshHabits">REFRESH</button></div><div class="habit-summary-grid"><div class="habit-summary"><div class="habit-summary-k">13 WEEK RATE</div><div class="habit-summary-v">${data.completionRate}%</div></div><div class="habit-summary"><div class="habit-summary-k">TOTAL COMPLETIONS</div><div class="habit-summary-v">${data.totalCompletions}</div></div><div class="habit-summary"><div class="habit-summary-k">ACTIVE HABITS</div><div class="habit-summary-v">${data.habitCount}</div></div><div class="habit-summary"><div class="habit-summary-k">WINDOW</div><div class="habit-summary-v">13W</div></div></div>${overall}<div class="habit-analytics-grid">${cards}</div>`;
-  document.getElementById('refreshHabits').onclick=async()=>{STATE.habitDashboard=null;await renderHabitsPage()};
+
+  const elapsed=(data.days||[]).filter(d=>!d.future);
+  const currentWeek=(data.days||[]).slice(-7).filter(d=>!d.future);
+  const last7=elapsed.slice(-7);
+
+  const weekDone=currentWeek.reduce((sum,d)=>sum+(d.count||0),0);
+  const weekPossible=currentWeek.length*(data.habitCount||0);
+  const last7Done=last7.reduce((sum,d)=>sum+(d.count||0),0);
+  const last7Possible=last7.length*(data.habitCount||0);
+
+  const bestDay=elapsed.reduce((best,d)=>{
+    if(!best||Number(d.count||0)>Number(best.count||0))return d;
+    return best;
+  },null);
+
+  const perfectDays=elapsed.filter(d=>
+    data.habitCount>0 && Number(d.count||0)>=Number(data.habitCount)
+  ).length;
+
+  const bestDayDate=bestDay&&bestDay.date
+    ? new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric'})
+        .format(new Date(bestDay.date+'T12:00:00')).toUpperCase()
+    : '—';
+
+  const overall=`
+    <section class="habit-overall">
+      <div class="heatmap-title-row">
+        <div>
+          <div class="heatmap-label">ALL HABITS // 全体</div>
+          <div class="panel-sub">LAST 13 WEEKS · DAILY INTENSITY = HABITS COMPLETED</div>
+        </div>
+        <div class="overall-rate">
+          <strong>${data.completionRate}%</strong>
+          <span>13 WEEK RATE</span>
+        </div>
+      </div>
+
+      <div class="overall-body">
+        <div class="overall-map">
+          ${habitHeatmap(data.days,null,'ALL HABITS')}
+        </div>
+
+        <div class="overall-stats">
+          <div class="overall-stat">
+            <b>${weekDone}<small>/${weekPossible||0}</small></b>
+            <span>THIS WEEK</span>
+          </div>
+          <div class="overall-stat">
+            <b>${last7Done}<small>/${last7Possible||0}</small></b>
+            <span>LAST 7 DAYS</span>
+          </div>
+          <div class="overall-stat">
+            <b>${bestDay?bestDay.count:0}<small>/${data.habitCount||0}</small></b>
+            <span>BEST DAY · ${bestDayDate}</span>
+          </div>
+          <div class="overall-stat">
+            <b>${perfectDays}</b>
+            <span>PERFECT DAYS</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="habit-day-detail" id="habitDayDetail">
+        CLICK A SQUARE TO SEE WHAT YOU COMPLETED THAT DAY
+      </div>
+    </section>
+  `;
+
+  const cards=(data.habits||[]).map(h=>{
+    const set=new Set(h.dates||[]);
+    return `
+      <section class="habit-analytics-card" style="--habit-accent:${HABIT_COLORS[h.color]||'#8e3e42'}">
+        <div class="habit-card-head">
+          <div class="habit-card-name">${esc(h.name)}</div>
+          <div class="habit-card-rate">${h.rate}% // 13W</div>
+        </div>
+
+        <div class="habit-stat-row">
+          <div class="habit-stat"><b>${h.currentStreak}</b><span>CURRENT STREAK</span></div>
+          <div class="habit-stat"><b>${h.bestStreak}</b><span>BEST STREAK</span></div>
+          <div class="habit-stat"><b>${h.thisWeek}</b><span>THIS WEEK</span></div>
+          <div class="habit-stat"><b>${h.completions}</b><span>COMPLETIONS</span></div>
+        </div>
+
+        ${habitHeatmap(data.days,set,h.name)}
+      </section>
+    `;
+  }).join('');
+
+  root.innerHTML=`
+    <div class="habits-page-head">
+      <div>
+        <div class="page-title">HABITS // 習慣</div>
+        <div class="panel-sub" style="margin-top:5px">LOG ON HOME · REVIEW HERE</div>
+      </div>
+      <button class="ghost-btn" id="refreshHabits">REFRESH</button>
+    </div>
+
+    <div class="habit-summary-grid">
+      <div class="habit-summary">
+        <div class="habit-summary-k">13 WEEK RATE</div>
+        <div class="habit-summary-v">${data.completionRate}%</div>
+      </div>
+      <div class="habit-summary">
+        <div class="habit-summary-k">TOTAL COMPLETIONS</div>
+        <div class="habit-summary-v">${data.totalCompletions}</div>
+      </div>
+      <div class="habit-summary">
+        <div class="habit-summary-k">ACTIVE HABITS</div>
+        <div class="habit-summary-v">${data.habitCount}</div>
+      </div>
+      <div class="habit-summary">
+        <div class="habit-summary-k">WINDOW</div>
+        <div class="habit-summary-v">13W</div>
+      </div>
+    </div>
+
+    ${overall}
+
+    <div class="habit-analytics-grid">
+      ${cards}
+    </div>
+  `;
+
+  document.getElementById('refreshHabits').onclick=async()=>{
+    STATE.habitDashboard=null;
+    await renderHabitsPage();
+  };
+
   bindHabitCells();
 }
 function habitHeatmap(days,completedSet,label){
