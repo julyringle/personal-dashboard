@@ -176,7 +176,7 @@ function getCalendarWeek(weekOffset) {
         end: ev.getEndTime().toISOString(),
         allDay: ev.isAllDayEvent(),
         calendar: cal.getName(),
-        color: safeCalendarColor_(cal),
+        color: safeEventColor_(ev, cal),
         location: ev.getLocation() || ''
       });
     });
@@ -207,6 +207,27 @@ function getSelectedCalendars_() {
 
 function safeCalendarColor_(cal) {
   try { return cal.getColor() || '#536979'; } catch (e) { return '#536979'; }
+}
+
+function safeEventColor_(ev, cal) {
+  const colors = {
+    '1': '#A4BDFC', // Lavender
+    '2': '#7AE7BF', // Sage
+    '3': '#DBADFF', // Grape
+    '4': '#FF887C', // Flamingo
+    '5': '#FBD75B', // Banana
+    '6': '#FFB878', // Tangerine
+    '7': '#46D6DB', // Peacock
+    '8': '#E1E1E1', // Graphite
+    '9': '#5484ED', // Blueberry
+    '10': '#51B749', // Basil
+    '11': '#DC2127' // Tomato
+  };
+  try {
+    const eventColor = String(ev.getColor() || '');
+    if (colors[eventColor]) return colors[eventColor];
+  } catch (e) {}
+  return safeCalendarColor_(cal);
 }
 
 function mondayStart_(date) {
