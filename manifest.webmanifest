@@ -1,0 +1,10 @@
+{
+  "name":"Personal Dashboard",
+  "short_name":"Dashboard",
+  "start_url":"./",
+  "scope":"./",
+  "display":"standalone",
+  "background_color":"#07090b",
+  "theme_color":"#07090b",
+  "description":"Private personal dashboard"
+}
