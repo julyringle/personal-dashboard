@@ -1,6 +1,7 @@
 (()=>{
   const CONFIG_KEY='pdStandaloneConfigV1';
   const TOKEN_KEY='pdStandaloneTokenV1';
+  const DEFAULT_CLIENT_ID='768938791390-06nk1l8csltji5vsmah53oub1kninm1b.apps.googleusercontent.com';
   const SCOPES=[
     'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/spreadsheets',
@@ -18,7 +19,7 @@
   function savedConfig(){
     try{
       const x=JSON.parse(localStorage.getItem(CONFIG_KEY)||'null');
-      return x&&x.clientId&&x.deploymentId?x:null;
+      return x&&x.clientId&&x.scriptId?x:null;
     }catch(e){return null}
   }
   function savedToken(){
@@ -63,17 +64,17 @@
         <div class="standalone-kicker">PRIVATE DASHBOARD // 初期設定</div>
         <h1>Connect this device</h1>
         <p>This one-time setup connects the standalone dashboard to your private Google Apps Script backend. These two IDs are not passwords.</p>
-        <label>OAuth client ID<input id="standaloneClientId" autocomplete="off" placeholder="...apps.googleusercontent.com"></label>
-        <label>API executable deployment ID<input id="standaloneDeploymentId" autocomplete="off" placeholder="AKfy..."></label>
+        <label>OAuth client ID<input id="standaloneClientId" autocomplete="off" value="${DEFAULT_CLIENT_ID}" placeholder="...apps.googleusercontent.com"></label>
+        <label>Apps Script project Script ID<input id="standaloneScriptId" autocomplete="off" placeholder="Script ID from Apps Script Project Settings"></label>
         <button id="standaloneSaveConfig" class="standalone-primary">SAVE & CONTINUE</button>
         <div class="standalone-note">The IDs stay in this browser only. Your Sheets and Calendar data are not stored in GitHub.</div>
       `);
       const btn=document.getElementById('standaloneSaveConfig');
       btn.onclick=()=>{
         const clientId=document.getElementById('standaloneClientId').value.trim();
-        const deploymentId=document.getElementById('standaloneDeploymentId').value.trim();
-        if(!clientId||!deploymentId){alert('Enter both IDs first.');return}
-        const cfg={clientId,deploymentId};
+        const scriptId=document.getElementById('standaloneScriptId').value.trim();
+        if(!clientId||!scriptId){alert('Enter both IDs first.');return}
+        const cfg={clientId,scriptId};
         localStorage.setItem(CONFIG_KEY,JSON.stringify(cfg));
         configPromise=null;
         resolve(cfg);
@@ -123,7 +124,7 @@
     return authPromise;
   }
   async function execute(cfg,token,method,args){
-    const response=await fetch('https://script.googleapis.com/v1/scripts/'+encodeURIComponent(cfg.deploymentId)+':run',{
+    const response=await fetch('https://script.googleapis.com/v1/scripts/'+encodeURIComponent(cfg.scriptId)+':run',{
       method:'POST',
       headers:{'Authorization':'Bearer '+token.accessToken,'Content-Type':'application/json'},
       body:JSON.stringify({function:method,parameters:args||[]})
