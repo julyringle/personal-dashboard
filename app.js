@@ -2,7 +2,7 @@ const STATE = {
   route:(window.__INITIAL_VIEW__||'home'), bootstrap:null, weekOffset:0,
   collectionTab:'wishlist', collectionCache:{},
   pokemonGen:'1', pokemonFilter:'all', wishlistCategory:'all', onePiecePage:'all',
-  modalType:null
+  modalType:null, habitDashboard:null
 };
 const LINKS = {
   health:'https://app.notion.com/p/3ea2911394258117a53ae060d1541d21',
@@ -37,7 +37,7 @@ function updateClock(){const n=new Date();document.getElementById('clock').inner
 setInterval(updateClock,30000);updateClock();
 
 document.querySelectorAll('[data-route]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.route)));
-function navigate(route){STATE.route=route;document.querySelectorAll('[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===route));if(route==='collections')renderCollections();else renderHome();}
+function navigate(route){STATE.route=route;document.querySelectorAll('[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===route));if(route==='habits')renderHabitsPage();else if(route==='collections')renderCollections();else renderHome();}
 
 async function init(){
   try{STATE.bootstrap=await server('getBootstrapData');applyTheme();navigate(STATE.route);if(STATE.bootstrap.errors?.length)console.warn(STATE.bootstrap.errors)}catch(e){document.getElementById('app').innerHTML=`<div class="error">${esc(e.message)}</div>`}
@@ -48,7 +48,6 @@ function renderHome(){
   const b=STATE.bootstrap||{};const root=document.getElementById('app');
   let html='<div class="home-grid">';
   html+=`<div class="span-12">${calendarPanel(b.calendar)}</div>`;
-  html+=`<div class="span-12">${quickPanel()}</div>`;
   html+=`<div class="span-12">${habitsPanel(b.habits||[])}</div>`;
   html+=`<div class="span-8">${focusPanel(b.focus||[])}</div>`;
   html+=`<div class="span-4">${healthPanel(b.health)}</div>`;
@@ -60,7 +59,6 @@ function renderHome(){
   root.innerHTML=html;bindHome();
 }
 function bindHome(){
-  document.querySelectorAll('[data-quick]').forEach(x=>x.onclick=()=>openQuick(x.dataset.quick));
   document.querySelectorAll('[data-habit]').forEach(x=>x.onclick=()=>toggleHabitUI(x.dataset.habit));
   document.querySelectorAll('[data-week]').forEach(x=>x.onclick=()=>changeWeek(Number(x.dataset.week)));
   document.querySelectorAll('[data-open-route]').forEach(x=>x.onclick=()=>navigate(x.dataset.openRoute));
@@ -74,17 +72,17 @@ function quickPanel(){return panel('QUICK CAPTURE','即時入力',`<div class="p
 </div></div>`)}
 function habitsPanel(habits){
   const body=habits.length?`<div class="panel-body"><div class="habit-grid">${habits.map((h,i)=>`<div class="habit"><div class="habit-name">${esc(h.name)}</div><button class="toggle ${h.done?'on':''}" data-habit="${i}" title="${h.done?'Undo today':'Complete today'}"></button></div>`).join('')}</div></div>`:`<div class="empty">NO HABITS AVAILABLE</div>`;
-  return panel('HABITS','習慣',body,{right:`<div class="panel-sub">CLICK AGAIN TO UNDO</div>`});
+  return panel('HABITS','習慣',body,{right:`<button class="panel-link" data-open-route="habits">13 WEEK TRACKER →</button>`});
 }
-async function toggleHabitUI(index){const h=STATE.bootstrap.habits[Number(index)];if(!h)return;try{const res=await server('toggleHabit',{cardId:h.cardId,habitId:h.habitId,logId:h.logId});h.done=res.done;h.logId=res.logId;renderHome()}catch(e){alert(e.message)}}
+async function toggleHabitUI(index){const h=STATE.bootstrap.habits[Number(index)];if(!h)return;try{const res=await server('toggleHabit',{cardId:h.cardId,habitId:h.habitId,logId:h.logId});h.done=res.done;h.logId=res.logId;STATE.habitDashboard=null;renderHome()}catch(e){alert(e.message)}}
 function focusPanel(tasks){const n=settingNum('Focus Count',5);const show=tasks.slice(0,n);const body=show.length?`<div class="panel-body task-list">${show.map((t,i)=>taskRow(t,i)).join('')}</div>`:`<div class="empty">FOCUS QUEUE CLEAR</div>`;return panel('FOCUS','優先',body,{right:`<div class="panel-sub">${show.length} ACTIVE</div>`})}
 function taskRow(t,i){const due=t.due?new Date(t.due):null;const overdue=due&&due<startDay(new Date());return `<a class="task-row" href="${attr(t.url||'#')}"><div class="task-num">${String(i+1).padStart(2,'0')}</div><div><div class="task-title">${esc(t.title)}</div><div class="task-meta"><span class="priority-${String(t.priority||'').toLowerCase()}">${esc(t.priority||'')}</span>${t.area?' · '+esc(t.area):''}</div></div><div class="due ${overdue?'overdue':''}">${t.due?fmtDate(t.due,{month:'short',day:'2-digit'}).toUpperCase():'—'}</div></a>`}
 function healthPanel(h){if(!h||!h.latest)return panel('HEALTH','健康','<div class="empty">NO RECENT CHECK-IN</div>');const x=h.latest;const metrics=[['WEIGHT',x.weight!=null?x.weight+' LB':'—',h.weightTrend30d!=null?(h.weightTrend30d>0?'+':'')+h.weightTrend30d+' / 30D':''],['SLEEP',x.sleepHours!=null?x.sleepHours+' H':'—',x.sleepScore!=null?'SCORE '+x.sleepScore:''],['HRV',x.hrv??'—',''],['REST HR',x.restingHR??'—','BPM'],['STEPS',x.steps!=null?Number(x.steps).toLocaleString():'—',''],['PROTEIN',x.protein!=null?x.protein+' G':'—','']];return panel('HEALTH','健康',`<div class="panel-body"><div class="metric-grid">${metrics.map(m=>`<div class="metric"><div class="metric-k">${m[0]}</div><div class="metric-v">${esc(m[1])}</div><div class="metric-d">${esc(m[2])}</div></div>`).join('')}</div></div>`,{right:`<a class="panel-sub" href="${LINKS.health}">OPEN ↗</a>`})}
 function schoolPanel(tasks){const show=tasks.slice(0,4);return panel('SCHOOL','学業',show.length?`<div class="panel-body task-list">${show.map((t,i)=>taskRow(t,i)).join('')}</div>`:`<div class="empty">NO OPEN SCHOOL TASKS</div>`,{right:`<a class="panel-sub" href="${LINKS.school}">OPEN ↗</a>`})}
-function projectPanel(projects){const p=projects[0];if(!p)return panel('PROJECTS','計画','<div class="empty">NO ACTIVE PROJECT</div>');const progress=p.progress==null?null:Math.max(0,Math.min(1,Number(p.progress)));return panel('PROJECTS','計画',`<div class="panel-body project-card"><div class="project-name">${esc(p.name)}</div><div class="tagline">${p.phase?`<span class="tag">${esc(p.phase)}</span>`:''}${p.priority?`<span class="tag">${esc(p.priority)}</span>`:''}${p.targetDate?`<span class="tag">${fmtDate(p.targetDate).toUpperCase()}</span>`:''}</div>${p.summary?`<div class="project-summary">${esc(p.summary)}</div>`:''}${progress!=null?`<div class="progress"><i style="width:${Math.round(progress*100)}%"></i></div>`:''}</div>`,{right:`<a class="panel-sub" href="${LINKS.projects}">OPEN ↗</a>`})}
+function projectPanel(projects){const p=projects.find(x=>/rescue raft/i.test(x.name||''))||projects.find(x=>x.area==='Projects')||projects[0];if(!p)return panel('PROJECTS','計画','<div class="empty">NO ACTIVE PROJECT</div>');const progress=p.progress==null?null:Math.max(0,Math.min(1,Number(p.progress)));return panel('PROJECTS','計画',`<div class="panel-body project-card"><div class="project-name">${esc(p.name)}</div><div class="tagline">${p.phase?`<span class="tag">${esc(p.phase)}</span>`:''}${p.priority?`<span class="tag">${esc(p.priority)}</span>`:''}${p.targetDate?`<span class="tag">${fmtDate(p.targetDate).toUpperCase()}</span>`:''}</div>${p.summary?`<div class="project-summary">${esc(p.summary)}</div>`:''}${progress!=null?`<div class="progress"><i style="width:${Math.round(progress*100)}%"></i></div>`:''}</div>`,{right:`<a class="panel-sub" href="${attr(p.url||LINKS.projects)}">OPEN ↗</a>`})}
 function collectionLaunchPanel(){return panel('COLLECTIONS','収集',`<div class="panel-body"><div class="collection-launch">
   <button class="launch-card" data-open-route="collections" onclick="STATE.collectionTab='wishlist'"><div class="launch-title">WISHLIST</div><div class="launch-jp">欲しい物</div><div class="launch-note">LIVE FROM SHEET</div></button>
-  <button class="launch-card" data-open-route="collections" onclick="STATE.collectionTab='soccer'"><div class="launch-title">SOCCER</div><div class="launch-jp">ユニフォーム</div><div class="launch-note">4-COLUMN VIEW</div></button>
+  <button class="launch-card" data-open-route="collections" onclick="STATE.collectionTab='soccer'"><div class="launch-title">SOCCER</div><div class="launch-jp">ユニフォーム</div><div class="launch-note">SHEET ORDER</div></button>
   <button class="launch-card" data-open-route="collections" onclick="STATE.collectionTab='pokemon'"><div class="launch-title">POKÉMON</div><div class="launch-jp">世代</div><div class="launch-note">GEN I–IX</div></button>
   <button class="launch-card" data-open-route="collections" onclick="STATE.collectionTab='onepiece'"><div class="launch-title">ONE PIECE</div><div class="launch-jp">ページ</div><div class="launch-note">BINDER PAGES</div></button>
 </div></div>`)}
@@ -96,7 +94,7 @@ function calendarPanel(cal){
   const now=new Date();
   const headers=days.map(d=>`<div class="cal-head-cell ${sameDay(d,now)?'today':''}"><b>${new Intl.DateTimeFormat('en-US',{weekday:'short'}).format(d).toUpperCase()}</b>${new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric'}).format(d).toUpperCase()}</div>`).join('');
   const all=days.map(d=>`<div class="all-day-cell">${calendarDayEvents(cal.events,d,'all',startHour,endHour).map(e=>`<div class="all-chip" style="--event-color:${attr(e.color||'#536979')}">${esc(e.title)}</div>`).join('')}</div>`).join('');
-  const midnight=days.map(d=>`<div class="midnight-cell">${calendarDayEvents(cal.events,d,'midnight',startHour,endHour).map(e=>`<div class="mid-chip" style="border-left-color:${attr(e.color||'#8E2027')}">${esc(e.title)}</div>`).join('')}</div>`).join('');
+  const midnight=days.map(d=>`<div class="midnight-cell">${calendarDayEvents(cal.events,d,'midnight',startHour,endHour).map(e=>`<div class="mid-chip" style="--event-color:${attr(e.color||'#8E2027')}">${esc(e.title)}</div>`).join('')}</div>`).join('');
   const timeLabels=Array.from({length:endHour-startHour},(_,i)=>`<div class="time-label" style="top:${i*hourH}px">${formatHour(startHour+i)}</div>`).join('');
   const dayCols=days.map(d=>`<div class="day-col ${sameDay(d,now)?'today':''}" style="height:${totalH}px">${hourLines(startHour,endHour,hourH)}${renderTimedEvents(cal.events,d,startHour,endHour,hourH)}${renderNow(d,now,startHour,endHour,hourH)}</div>`).join('');
   const right=`<div class="cal-toolbar"><button class="ghost-btn" data-week="${STATE.weekOffset-1}">‹</button><button class="ghost-btn" data-week="0">TODAY</button><button class="ghost-btn" data-week="${STATE.weekOffset+1}">›</button></div>`;
@@ -109,6 +107,33 @@ function renderTimedEvents(events,day,startHour,endHour,hourH){const ds=startDay
 function renderNow(day,now,startHour,endHour,hourH){if(!sameDay(day,now))return'';const mins=now.getHours()*60+now.getMinutes(),start=startHour*60,end=endHour*60;if(mins<start||mins>end)return'';return `<div class="now-line" style="top:${((mins-start)/60)*hourH}px"></div>`}
 async function changeWeek(offset){STATE.weekOffset=offset;try{STATE.bootstrap.calendar=await server('getCalendarWeek',offset);renderHome()}catch(e){alert(e.message)}}
 
+
+const HABIT_COLORS={Orange:'#a8642a',Blue:'#536979',Pink:'#8a526c',Yellow:'#a88d3e',Purple:'#6e547a',Green:'#4e725c',Red:'#8e3e42'};
+async function renderHabitsPage(){
+  const root=document.getElementById('app');
+  root.innerHTML='<div class="loading">LOADING HABITS // 習慣データ読込</div>';
+  try{
+    if(!STATE.habitDashboard)STATE.habitDashboard=await server('getHabitDashboardData');
+    renderHabitDashboard(STATE.habitDashboard);
+  }catch(e){root.innerHTML=`<div class="error">${esc(e.message)}</div>`}
+}
+function renderHabitDashboard(data){
+  const root=document.getElementById('app');
+  const overall=`<section class="habit-overall"><div class="heatmap-title-row"><div><div class="heatmap-label">ALL HABITS // 全体</div><div class="panel-sub">LAST 13 WEEKS</div></div><div class="panel-sub">${data.totalCompletions} COMPLETIONS</div></div>${habitHeatmap(data.days,null,'ALL HABITS')}<div class="habit-day-detail" id="habitDayDetail">CLICK A SQUARE TO SEE THAT DAY</div></section>`;
+  const cards=(data.habits||[]).map(h=>{const set=new Set(h.dates||[]);return `<section class="habit-analytics-card" style="--habit-accent:${HABIT_COLORS[h.color]||'#8e3e42'}"><div class="habit-card-head"><div class="habit-card-name">${esc(h.name)}</div><div class="habit-card-rate">${h.rate}% // 13W</div></div><div class="habit-stat-row"><div class="habit-stat"><b>${h.currentStreak}</b><span>CURRENT STREAK</span></div><div class="habit-stat"><b>${h.bestStreak}</b><span>BEST STREAK</span></div><div class="habit-stat"><b>${h.thisWeek}</b><span>THIS WEEK</span></div><div class="habit-stat"><b>${h.completions}</b><span>COMPLETIONS</span></div></div>${habitHeatmap(data.days,set,h.name)}</section>`}).join('');
+  root.innerHTML=`<div class="habits-page-head"><div><div class="page-title">HABITS // 習慣</div><div class="panel-sub" style="margin-top:5px">LOG ON HOME · REVIEW HERE</div></div><button class="ghost-btn" id="refreshHabits">REFRESH</button></div><div class="habit-summary-grid"><div class="habit-summary"><div class="habit-summary-k">13 WEEK RATE</div><div class="habit-summary-v">${data.completionRate}%</div></div><div class="habit-summary"><div class="habit-summary-k">TOTAL COMPLETIONS</div><div class="habit-summary-v">${data.totalCompletions}</div></div><div class="habit-summary"><div class="habit-summary-k">ACTIVE HABITS</div><div class="habit-summary-v">${data.habitCount}</div></div><div class="habit-summary"><div class="habit-summary-k">WINDOW</div><div class="habit-summary-v">13W</div></div></div>${overall}<div class="habit-analytics-grid">${cards}</div>`;
+  document.getElementById('refreshHabits').onclick=async()=>{STATE.habitDashboard=null;await renderHabitsPage()};
+  bindHabitCells();
+}
+function habitHeatmap(days,completedSet,label){
+  const weeks=[];for(let i=0;i<days.length;i+=7)weeks.push(days.slice(i,i+7));
+  let lastMonth='';
+  const months=weeks.map(w=>{const d=new Date(w[0].date+'T12:00:00');const m=new Intl.DateTimeFormat('en-US',{month:'short'}).format(d).toUpperCase();const show=m!==lastMonth;lastMonth=m;return `<div class="heatmap-month">${show?m:''}</div>`}).join('');
+  const cells=days.map(d=>{let level=d.level;if(completedSet)level=d.future?-1:(completedSet.has(d.date)?4:0);const detail=completedSet?`${label} // ${d.date} // ${level===4?'COMPLETED':'NOT COMPLETED'}`:`${d.date} // ${d.count} completed${d.habits&&d.habits.length?' // '+d.habits.join(', '):''}`;return `<button class="heat-cell ${d.future?'future':'l'+Math.max(0,level)}" data-habit-detail="${attr(detail)}" title="${attr(detail)}"></button>`}).join('');
+  return `<div class="heatmap-wrap"><div class="heatmap-months"><div></div>${months}</div><div class="heatmap-layout"><div class="heatmap-weekdays">${['MON','TUE','WED','THU','FRI','SAT','SUN'].map(x=>`<div class="heatmap-weekday">${x}</div>`).join('')}</div><div class="heatmap-grid">${cells}</div></div><div class="heatmap-legend"><span>LESS</span><i class="legend-box l0"></i><i class="legend-box l1"></i><i class="legend-box l2"></i><i class="legend-box l3"></i><i class="legend-box l4"></i><span>MORE</span></div></div>`;
+}
+function bindHabitCells(){document.querySelectorAll('[data-habit-detail]').forEach(x=>x.onclick=()=>{const target=document.getElementById('habitDayDetail');if(target)target.textContent=x.dataset.habitDetail})}
+
 async function renderCollections(){
   const root=document.getElementById('app');root.innerHTML=`<div class="collections-head"><div><div class="page-title">COLLECTIONS // 収集</div><div class="panel-sub" style="margin-top:5px">LIVE VIEWS FROM YOUR GOOGLE SHEETS</div></div><div class="tabs">${collectionTabs()}</div></div><div id="collectionBody"><div class="loading">LOADING COLLECTION // データ読込</div></div>`;
   bindCollectionTabs();await loadCollection(STATE.collectionTab);
@@ -118,20 +143,7 @@ function bindCollectionTabs(){document.querySelectorAll('[data-coltab]').forEach
 async function loadCollection(kind){const body=document.getElementById('collectionBody');body.innerHTML='<div class="loading">LOADING // 読込中</div>';try{let key=kind;if(kind==='pokemon')key+=':'+STATE.pokemonGen;let data=STATE.collectionCache[key];if(!data){data=await server('getCollectionData',kind,kind==='pokemon'?{generation:STATE.pokemonGen}:{ });STATE.collectionCache[key]=data}renderCollectionData(data)}catch(e){body.innerHTML=`<div class="error">${esc(e.message)}</div>`}}
 function renderCollectionData(data){if(data.kind==='wishlist')renderWishlist(data);if(data.kind==='soccer')renderSoccer(data);if(data.kind==='pokemon')renderPokemon(data);if(data.kind==='onepiece')renderOnePiece(data)}
 function imgBlock(url,label){return `<div class="image-wrap">${url?`<img loading="lazy" referrerpolicy="no-referrer" src="${attr(url)}" data-original-src="${attr(url)}" alt="${attr(label||'')}">`:`<div class="image-fallback">IMAGE<br>NOT AVAILABLE</div>`}</div>`}
-function bindImageFallbacks(){
-  document.querySelectorAll('.image-wrap img[data-original-src]').forEach(img=>{
-    img.onerror=()=>{
-      const original=img.dataset.originalSrc||'';
-      if(img.dataset.fallbackStage!=='cdn' && original.includes('www.footballkitarchive.com/cdn/')){
-        img.dataset.fallbackStage='cdn';
-        img.src=original.replace('https://www.footballkitarchive.com/cdn/','https://cdn.footballkitarchive.com/');
-        return;
-      }
-      const wrap=img.closest('.image-wrap');
-      if(wrap)wrap.innerHTML='<div class="image-fallback">IMAGE<br>NOT AVAILABLE</div>';
-    };
-  });
-}
+function bindImageFallbacks(){document.querySelectorAll('.image-wrap img[data-original-src]').forEach(img=>{img.onerror=()=>{const original=img.dataset.originalSrc||'';if(img.dataset.fallbackStage!=='cdn'&&original.includes('www.footballkitarchive.com/cdn/')){img.dataset.fallbackStage='cdn';img.src=original.replace('https://www.footballkitarchive.com/cdn/','https://cdn.footballkitarchive.com/');return}const wrap=img.closest('.image-wrap');if(wrap)wrap.innerHTML='<div class="image-fallback">IMAGE<br>NOT AVAILABLE</div>'}})}
 function renderWishlist(data){const body=document.getElementById('collectionBody');const cats=['all',...(data.categories||[])];let items=data.items||[];if(STATE.wishlistCategory!=='all')items=items.filter(x=>x.category===STATE.wishlistCategory);body.innerHTML=`<div class="collection-tools">${cats.map(c=>`<button class="chip ${STATE.wishlistCategory===c?'active':''}" data-wcat="${attr(c)}">${esc(c==='all'?'ALL':c.toUpperCase())}</button>`).join('')}</div><div class="card-grid">${items.map(x=>`<article class="visual-card">${imgBlock(x.image,x.name)}<div class="card-content"><div class="card-title">${esc(x.name)}</div><div class="card-meta">${esc(x.category)}${x.store?' · '+esc(x.store):''}</div>${x.price?`<div class="card-price">${esc(x.price)}</div>`:''}${x.link?`<div class="card-actions"><a class="card-link" href="${attr(x.link)}">OPEN ↗</a></div>`:''}</div></article>`).join('')}</div>`;document.querySelectorAll('[data-wcat]').forEach(b=>b.onclick=()=>{STATE.wishlistCategory=b.dataset.wcat;renderWishlist(data)});bindImageFallbacks()}
 function renderSoccer(data){document.getElementById('collectionBody').innerHTML=`<div class="collection-tools"><span class="panel-sub">SHEET ORDER // TEAM COLORS PRESERVED AS ACCENTS</span></div><div class="card-grid soccer-grid">${(data.items||[]).map(x=>`<article class="visual-card soccer-card" style="--team:${attr(x.accent)}">${imgBlock(x.image,x.name)}<div class="card-content"><div class="card-title">${esc(x.name)}</div>${x.price?`<div class="card-price">${esc(x.price)}</div>`:''}</div></article>`).join('')}</div>`;bindImageFallbacks()}
 function renderPokemon(data){const body=document.getElementById('collectionBody');let items=data.items||[];if(STATE.pokemonFilter==='owned')items=items.filter(x=>x.owned);if(STATE.pokemonFilter==='missing')items=items.filter(x=>!x.owned);body.innerHTML=`<div class="collection-tools"><button class="chip ${STATE.pokemonGen==='all'?'active':''}" data-gen="all">ALL</button>${(data.generations||[]).map(g=>`<button class="chip ${STATE.pokemonGen===g?'active':''}" data-gen="${g}" style="border-bottom-color:${GEN_COLORS[g]}">GEN ${g}</button>`).join('')}<span style="width:8px"></span>${['all','owned','missing'].map(f=>`<button class="chip ${STATE.pokemonFilter===f?'active':''}" data-pfilter="${f}">${f.toUpperCase()}</button>`).join('')}</div><div class="card-grid">${items.map(x=>`<article class="visual-card pokemon-card ${x.owned?'':'dim'}" style="--gen:${GEN_COLORS[x.generation]||'#73777C'}"><div class="status-mark ${x.owned?'owned':'wanted'}">${x.owned?'OWNED':'MISSING'}</div>${imgBlock(x.image,x.entry)}<div class="card-content"><div class="card-title">${esc(x.entry)}</div><div class="card-meta">${esc(x.dex)} · SLOT ${esc(x.slot||'—')}<br>${esc(x.region)} · GEN ${esc(x.generation)}</div>${x.targetCard?`<div class="card-price">${esc(x.targetCard)}${x.price?' · '+esc(x.price):''}</div>`:''}${x.collectr?`<div class="card-actions"><a class="card-link" href="${attr(x.collectr)}">COLLECTR ↗</a></div>`:''}</div></article>`).join('')}</div>`;document.querySelectorAll('[data-gen]').forEach(b=>b.onclick=async()=>{STATE.pokemonGen=b.dataset.gen;await loadCollection('pokemon')});document.querySelectorAll('[data-pfilter]').forEach(b=>b.onclick=()=>{STATE.pokemonFilter=b.dataset.pfilter;renderPokemon(data)});bindImageFallbacks()}
@@ -142,6 +154,6 @@ function quickFields(type){if(type==='task'||type==='school_task')return `<div c
 function closeModal(){document.getElementById('modalBackdrop').classList.remove('open');STATE.modalType=null}
 document.getElementById('modalClose').onclick=closeModal;document.getElementById('modalCancel').onclick=e=>{e.preventDefault();closeModal()};document.getElementById('modalBackdrop').addEventListener('click',e=>{if(e.target.id==='modalBackdrop')closeModal()});
 document.getElementById('modalSave').onclick=async e=>{e.preventDefault();const form=document.getElementById('quickForm');const fd=new FormData(form),payload={};for(const[k,v]of fd.entries())payload[k]=v;const btn=e.currentTarget;btn.disabled=true;btn.textContent='SAVING…';try{await server('createQuickItem',STATE.modalType,payload);closeModal();if(STATE.modalType==='wishlist'){STATE.collectionCache={};}STATE.bootstrap=await server('getBootstrapData');if(STATE.route==='home')renderHome();else await renderCollections()}catch(err){alert(err.message)}finally{btn.disabled=false;btn.textContent='SAVE'}};
-document.addEventListener('keydown',e=>{if(document.getElementById('modalBackdrop').classList.contains('open')){if(e.key==='Escape')closeModal();return}if(e.target.matches('input,textarea,select'))return;if(e.key.toLowerCase()==='t')openQuick('task');if(e.key.toLowerCase()==='n')openQuick('note');if(e.key.toLowerCase()==='c')navigate('collections')});
+document.addEventListener('keydown',e=>{if(e.target.matches('input,textarea,select'))return;if(e.key.toLowerCase()==='h')navigate('habits');if(e.key.toLowerCase()==='c')navigate('collections')});
 
 init();
