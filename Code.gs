@@ -1,19 +1,5 @@
 const APP = Object.freeze({
   TZ: 'America/Chicago',
-  NOTION_VERSION: '2025-09-03',
-  DS: {
-    SETTINGS: '859b0e5d-cecf-4ec3-afce-00d0cc7c5f4d',
-    TASKS: '948c89d0-a4b1-4fff-b2c7-71925b8db37f',
-    NOTES: 'd8adbe7e-c94a-41c5-bae2-b927f1a82ca8',
-    PROJECTS: 'e44d6123-6059-4c70-98fe-6564f3b863fa',
-    CHECKINS: 'ed679659-0afb-45f1-a241-6b39ecd037db',
-    HABITS: '6ae29113-9425-83ba-a4f5-8741080a3450',
-    HABIT_CARDS: 'e8763a45-95d5-4315-b942-a257225d5cc7',
-    HABIT_HISTORY: '14e29113-9425-83b9-9177-07b64dd91447'
-  },
-  PAGES: {
-    ALL_HABITS_HEATMAP: 'dad29113-9425-8264-bf9d-0146df8d2d20'
-  },
   SHEETS: {
     WISHLIST: '19yizVWGTcdQqMJ6lYlZxvSSKAxOdD3nbukzd2OlfRaQ',
     SOCCER: '1-2l_FPSFpCYDHae2yOTkUIeXljKytsJasa1Ucum1K_w',
@@ -105,10 +91,9 @@ function getBootstrapData() {
     now: new Date().toISOString(),
     timezone: APP.TZ,
     setup: {
-      notionConnected: !!PropertiesService.getScriptProperties().getProperty('NOTION_TOKEN'),
-      backend: useSheetsBackend_() ? 'sheets' : 'notion',
-      dataReady: useSheetsBackend_() || !!PropertiesService.getScriptProperties().getProperty('NOTION_TOKEN'),
-      dataStoreUrl: useSheetsBackend_() ? dashboardSpreadsheet_().getUrl() : ''
+      backend: 'sheets',
+      dataReady: true,
+      dataStoreUrl: dashboardSpreadsheet_().getUrl()
     },
     settings: [],
     calendar: null,
@@ -123,40 +108,19 @@ function getBootstrapData() {
   const errors = [];
   try { out.settings = getDashboardSettings_(); } catch (e) { errors.push('settings: ' + e.message); }
   try { out.calendar = getCalendarWeek(0); } catch (e) { errors.push('calendar: ' + e.message); }
-
-  if (out.setup.dataReady) {
-    try { out.focus = getFocusTasks_(); } catch (e) { errors.push('focus: ' + e.message); }
-    try { out.habits = getHabits_(); } catch (e) { errors.push('habits: ' + e.message); }
-    try { out.health = getHealthSummary_(); } catch (e) { errors.push('health: ' + e.message); }
-    try { out.school = getSchoolSummary_(); } catch (e) { errors.push('school: ' + e.message); }
-    try { out.projects = getProjectsSummary_(); } catch (e) { errors.push('projects: ' + e.message); }
-    try { out.projectTasks = getProjectTasks_(); } catch (e) { errors.push('project tasks: ' + e.message); }
-  }
+  try { out.focus = getFocusTasks_(); } catch (e) { errors.push('focus: ' + e.message); }
+  try { out.habits = getHabits_(); } catch (e) { errors.push('habits: ' + e.message); }
+  try { out.health = getHealthSummary_(); } catch (e) { errors.push('health: ' + e.message); }
+  try { out.school = getSchoolSummary_(); } catch (e) { errors.push('school: ' + e.message); }
+  try { out.projects = getProjectsSummary_(); } catch (e) { errors.push('projects: ' + e.message); }
+  try { out.projectTasks = getProjectTasks_(); } catch (e) { errors.push('project tasks: ' + e.message); }
 
   out.errors = errors;
   return out;
 }
 
 function getDashboardSettings_() {
-  if (useSheetsBackend_()) return getDashboardSettingsSheet_();
-  const rows = notionQueryAll_(APP.DS.SETTINGS, {
-    sorts: [{ property: 'Order', direction: 'ascending' }],
-    page_size: 100
-  });
-  return rows.map(function(page) {
-    return {
-      id: page.id,
-      setting: notionText_(page.properties.Setting),
-      group: notionSelect_(page.properties.Group),
-      value: notionText_(page.properties.Value),
-      number: notionNumber_(page.properties.Number),
-      enabled: notionCheckbox_(page.properties.Enabled),
-      order: notionNumber_(page.properties.Order),
-      accent: notionSelect_(page.properties.Accent),
-      japanese: notionText_(page.properties.Japanese),
-      notes: notionText_(page.properties.Notes)
-    };
-  });
+  return getDashboardSettingsSheet_();
 }
 
 function getCalendarWeek(weekOffset) {
@@ -250,406 +214,42 @@ function mondayStart_(date) {
 }
 
 function getFocusTasks_() {
-  if (useSheetsBackend_()) return getFocusTasksSheet_();
-  const rows = notionQueryAll_(APP.DS.TASKS, {
-    filter: {
-      and: [
-        { property: 'Status', select: { does_not_equal: 'Done' } },
-        { property: 'Status', select: { does_not_equal: 'Archived' } },
-        { property: 'Done', checkbox: { equals: false } },
-        { property: 'Due', date: { is_not_empty: true } }
-      ]
-    },
-    sorts: [{ property: 'Due', direction: 'ascending' }],
-    page_size: 25
-  });
-
-  return rows.map(taskFromNotion_).filter(function(x) { return x.title; });
+  return getFocusTasksSheet_();
 }
 
 function getSchoolSummary_() {
-  if (useSheetsBackend_()) return getSchoolSummarySheet_();
-  const rows = notionQueryAll_(APP.DS.TASKS, {
-    filter: {
-      and: [
-        { property: 'Area', select: { equals: 'School' } },
-        { property: 'Status', select: { does_not_equal: 'Done' } },
-        { property: 'Status', select: { does_not_equal: 'Archived' } },
-        { property: 'Done', checkbox: { equals: false } }
-      ]
-    },
-    sorts: [{ property: 'Due', direction: 'ascending' }],
-    page_size: 12
-  });
-  return rows.map(taskFromNotion_).filter(function(x) { return x.title; });
+  return getSchoolSummarySheet_();
 }
 
-function taskFromNotion_(page) {
-  return {
-    id: page.id,
-    url: page.url,
-    title: notionText_(page.properties.Task),
-    status: notionSelect_(page.properties.Status),
-    priority: notionSelect_(page.properties.Priority),
-    area: notionSelect_(page.properties.Area),
-    due: notionDate_(page.properties.Due),
-    done: notionCheckbox_(page.properties.Done),
-    details: notionText_(page.properties.Details),
-    course: notionSelect_(page.properties.Course) || notionText_(page.properties.Course)
-  };
-}
 
 function getProjectsSummary_() {
-  if (useSheetsBackend_()) return getProjectsSummarySheet_();
-  const rows = notionQueryAll_(APP.DS.PROJECTS, {
-    filter: { property: 'Status', select: { equals: 'Active' } },
-    page_size: 20
-  });
-  return rows.map(function(page) {
-    return {
-      id: page.id,
-      url: page.url,
-      name: notionText_(page.properties.Name),
-      phase: notionSelect_(page.properties.Phase),
-      priority: notionSelect_(page.properties.Priority),
-      progress: notionNumber_(page.properties.Progress),
-      targetDate: notionDate_(page.properties['Target Date']),
-      summary: notionText_(page.properties.Summary),
-      area: notionSelect_(page.properties.Area),
-      budget: notionNumber_(page.properties.Budget)
-    };
-  }).filter(function(x) { return x.name; });
+  return getProjectsSummarySheet_();
 }
 
 function getProjectTasks_() {
-  if (useSheetsBackend_()) return getProjectTasksSheet_();
-  const rows = notionQueryAll_(APP.DS.TASKS, {
-    filter: {
-      and: [
-        { property: 'Area', select: { equals: 'Projects' } },
-        { property: 'Status', select: { does_not_equal: 'Done' } },
-        { property: 'Status', select: { does_not_equal: 'Archived' } },
-        { property: 'Done', checkbox: { equals: false } }
-      ]
-    },
-    sorts: [{ property: 'Due', direction: 'ascending' }],
-    page_size: 30
-  });
-  return rows.map(taskFromNotion_).filter(function(x) { return x.title; });
+  return getProjectTasksSheet_();
 }
 
 function getHealthSummary_() {
-  if (useSheetsBackend_()) return getHealthSummarySheet_();
-  const rows = notionQueryAll_(APP.DS.CHECKINS, {
-    filter: { property: 'Type', select: { equals: 'Daily Check-In' } },
-    sorts: [{ property: 'Date', direction: 'descending' }],
-    page_size: 30
-  });
-  if (!rows.length) return null;
-
-  const data = rows.map(function(page) {
-    return {
-      date: notionDate_(page.properties.Date),
-      weight: notionNumber_(page.properties['Morning Weight (lb)']),
-      sleepHours: notionNumber_(page.properties['Sleep Hours']),
-      sleepScore: notionNumber_(page.properties['Sleep Score']),
-      hrv: notionNumber_(page.properties.HRV),
-      restingHR: notionNumber_(page.properties['Resting HR']),
-      steps: notionNumber_(page.properties.Steps),
-      protein: notionNumber_(page.properties['Protein (g)']),
-      bodyBattery: notionNumber_(page.properties['Body Battery']),
-      energy: notionNumber_(page.properties.Energy),
-      stress: notionNumber_(page.properties.Stress),
-      soreness: notionNumber_(page.properties.Soreness),
-      mood: notionSelect_(page.properties.Mood)
-    };
-  });
-
-  const latest = data[0];
-  const oldestWeight = data.slice().reverse().find(function(x) { return x.weight !== null; });
-  const latestWeight = data.find(function(x) { return x.weight !== null; });
-  return {
-    latest: latest,
-    weightTrend30d: latestWeight && oldestWeight ? round1_(latestWeight.weight - oldestWeight.weight) : null,
-    series: data.slice().reverse()
-  };
+  return getHealthSummarySheet_();
 }
 
 function getHabits_() {
-  if (useSheetsBackend_()) return getHabitsSheet_();
-  const cards = notionQueryAll_(APP.DS.HABIT_CARDS, {
-    sorts: [{ property: 'Order', direction: 'ascending' }],
-    page_size: 100
-  });
-
-  const today = Utilities.formatDate(new Date(), APP.TZ, 'yyyy-MM-dd');
-  const tomorrowDate = new Date();
-  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-  const tomorrow = Utilities.formatDate(tomorrowDate, APP.TZ, 'yyyy-MM-dd');
-
-  const logs = notionQueryAll_(APP.DS.HABIT_HISTORY, {
-    filter: {
-      and: [
-        { property: 'Date', date: { on_or_after: today } },
-        { property: 'Date', date: { before: tomorrow } }
-      ]
-    },
-    page_size: 100
-  });
-
-  const byCard = {};
-  logs.forEach(function(log) {
-    const rel = notionRelationIds_(log.properties['Habit Card']);
-    if (rel.length) byCard[rel[0]] = log.id;
-  });
-
-  return cards.map(function(page) {
-    const habits = notionRelationIds_(page.properties.Habit);
-    return {
-      cardId: page.id,
-      habitId: habits.length ? habits[0] : '',
-      name: notionText_(page.properties.Name),
-      order: notionNumber_(page.properties.Order),
-      color: notionSelect_(page.properties.Color) || '',
-      done: !!byCard[page.id],
-      logId: byCard[page.id] || null
-    };
-  }).filter(function(x) { return x.name && x.habitId; });
+  return getHabitsSheet_();
 }
 
 
 function getHabitDashboardData() {
-  if (useSheetsBackend_()) return getHabitDashboardDataSheet_();
-  const cards = notionQueryAll_(APP.DS.HABIT_CARDS, {
-    sorts: [{ property: 'Order', direction: 'ascending' }],
-    page_size: 100
-  });
-
-  const today = new Date();
-  today.setHours(12, 0, 0, 0);
-  const currentMonday = mondayStart_(today);
-  currentMonday.setHours(12, 0, 0, 0);
-
-  const start = new Date(currentMonday);
-  start.setDate(start.getDate() - 84);
-  const end = new Date(currentMonday);
-  end.setDate(end.getDate() + 6);
-  const endExclusive = new Date(end);
-  endExclusive.setDate(endExclusive.getDate() + 1);
-
-  const startKey = Utilities.formatDate(start, APP.TZ, 'yyyy-MM-dd');
-  const endExclusiveKey = Utilities.formatDate(endExclusive, APP.TZ, 'yyyy-MM-dd');
-  const todayKey = Utilities.formatDate(today, APP.TZ, 'yyyy-MM-dd');
-
-  const habitCards = cards.map(function(page) {
-    const habitRel = notionRelationIds_(page.properties.Habit);
-    return {
-      cardId: page.id,
-      habitId: habitRel.length ? habitRel[0] : '',
-      name: notionText_(page.properties.Name),
-      color: notionSelect_(page.properties.Color) || '',
-      order: notionNumber_(page.properties.Order)
-    };
-  }).filter(function(x) { return x.name && x.habitId; });
-
-  const byCard = {};
-  const byHabit = {};
-  habitCards.forEach(function(card) {
-    byCard[card.cardId] = card;
-    byHabit[card.habitId] = card;
-  });
-
-  const logs = notionQueryAll_(APP.DS.HABIT_HISTORY, {
-    filter: {
-      and: [
-        { property: 'Date', date: { on_or_after: startKey } },
-        { property: 'Date', date: { before: endExclusiveKey } }
-      ]
-    },
-    page_size: 100
-  });
-
-  const completeByCard = {};
-  const completeByDay = {};
-
-  logs.forEach(function(log) {
-    const rawDate = notionDate_(log.properties.Date);
-    if (!rawDate) return;
-    const dateKey = Utilities.formatDate(new Date(rawDate), APP.TZ, 'yyyy-MM-dd');
-
-    let card = null;
-    const cardRel = notionRelationIds_(log.properties['Habit Card']);
-    if (cardRel.length) card = byCard[cardRel[0]] || null;
-    if (!card) {
-      const habitRel = notionRelationIds_(log.properties.Habit);
-      if (habitRel.length) card = byHabit[habitRel[0]] || null;
-    }
-    if (!card) return;
-
-    if (!completeByCard[card.cardId]) completeByCard[card.cardId] = {};
-    completeByCard[card.cardId][dateKey] = true;
-
-    if (!completeByDay[dateKey]) completeByDay[dateKey] = {};
-    completeByDay[dateKey][card.cardId] = card.name;
-  });
-
-  const days = [];
-  const cursor = new Date(start);
-  while (cursor <= end) {
-    const key = Utilities.formatDate(cursor, APP.TZ, 'yyyy-MM-dd');
-    const dayMap = completeByDay[key] || {};
-    const names = Object.keys(dayMap).map(function(id) { return dayMap[id]; });
-    const future = key > todayKey;
-    const count = names.length;
-    const ratio = habitCards.length ? count / habitCards.length : 0;
-    days.push({
-      date: key,
-      count: count,
-      level: future ? -1 : (count === 0 ? 0 : Math.max(1, Math.min(4, Math.ceil(ratio * 4)))),
-      habits: names,
-      future: future
-    });
-    cursor.setDate(cursor.getDate() + 1);
-  }
-
-  const elapsedDays = days.filter(function(d) { return !d.future; }).length;
-  const currentMondayKey = Utilities.formatDate(currentMonday, APP.TZ, 'yyyy-MM-dd');
-
-  const habits = habitCards.map(function(card) {
-    const map = completeByCard[card.cardId] || {};
-    const dates = Object.keys(map).sort();
-
-    let currentStreak = 0;
-    const streakCursor = new Date(today);
-    let streakKey = Utilities.formatDate(streakCursor, APP.TZ, 'yyyy-MM-dd');
-    if (!map[streakKey]) {
-      streakCursor.setDate(streakCursor.getDate() - 1);
-      streakKey = Utilities.formatDate(streakCursor, APP.TZ, 'yyyy-MM-dd');
-    }
-    while (map[streakKey]) {
-      currentStreak++;
-      streakCursor.setDate(streakCursor.getDate() - 1);
-      streakKey = Utilities.formatDate(streakCursor, APP.TZ, 'yyyy-MM-dd');
-    }
-
-    let bestStreak = 0;
-    let run = 0;
-    days.forEach(function(day) {
-      if (day.future) return;
-      if (map[day.date]) {
-        run++;
-        if (run > bestStreak) bestStreak = run;
-      } else {
-        run = 0;
-      }
-    });
-
-    const thisWeek = dates.filter(function(d) {
-      return d >= currentMondayKey && d <= todayKey;
-    }).length;
-
-    return {
-      cardId: card.cardId,
-      habitId: card.habitId,
-      name: card.name,
-      color: card.color,
-      order: card.order,
-      completions: dates.length,
-      currentStreak: currentStreak,
-      bestStreak: bestStreak,
-      thisWeek: thisWeek,
-      rate: elapsedDays ? Math.round((dates.length / elapsedDays) * 100) : 0,
-      dates: dates
-    };
-  });
-
-  const totalCompletions = days.filter(function(d) { return !d.future; })
-    .reduce(function(sum, d) { return sum + d.count; }, 0);
-  const totalPossible = elapsedDays * habitCards.length;
-
-  return {
-    startDate: startKey,
-    endDate: Utilities.formatDate(end, APP.TZ, 'yyyy-MM-dd'),
-    today: todayKey,
-    habitCount: habitCards.length,
-    elapsedDays: elapsedDays,
-    totalCompletions: totalCompletions,
-    completionRate: totalPossible ? Math.round((totalCompletions / totalPossible) * 100) : 0,
-    days: days,
-    habits: habits
-  };
+  return getHabitDashboardDataSheet_();
 }
 
 function toggleHabit(payload) {
-  if (useSheetsBackend_()) return toggleHabitSheet_(payload);
-  if (!payload || !payload.cardId || !payload.habitId) throw new Error('Habit identity missing.');
-
-  if (payload.logId) {
-    notionRequest_('/v1/pages/' + payload.logId, 'patch', { archived: true });
-    return { done: false, logId: null };
-  }
-
-  const now = new Date().toISOString();
-  const body = {
-    parent: { type: 'data_source_id', data_source_id: APP.DS.HABIT_HISTORY },
-    properties: {
-      'Name (not important)': { title: [{ text: { content: 'Habit log' } }] },
-      Date: { date: { start: now } },
-      Habit: { relation: [{ id: payload.habitId }] },
-      'Habit Card': { relation: [{ id: payload.cardId }] },
-      Heatmap: { relation: [{ id: APP.PAGES.ALL_HABITS_HEATMAP }] }
-    }
-  };
-  const created = notionRequest_('/v1/pages', 'post', body);
-  return { done: true, logId: created.id };
+  return toggleHabitSheet_(payload);
 }
 
 function createQuickItem(type, payload) {
-  if (useSheetsBackend_() && String(type || '').toLowerCase() !== 'wishlist') return createQuickItemSheet_(type, payload);
-  payload = payload || {};
-  type = String(type || '').toLowerCase();
-
-  if (type === 'wishlist') return appendWishlist_(payload);
-
-  if (type === 'task' || type === 'school_task') {
-    const title = String(payload.title || '').trim();
-    if (!title) throw new Error('Task title is required.');
-    const area = type === 'school_task' ? 'School' : (payload.area || 'Personal');
-    const properties = {
-      Task: { title: [{ text: { content: title } }] },
-      Status: { select: { name: 'Inbox' } },
-      Area: { select: { name: area } },
-      Done: { checkbox: false }
-    };
-    if (payload.priority) properties.Priority = { select: { name: payload.priority } };
-    if (payload.due) properties.Due = { date: { start: payload.due } };
-    if (payload.details) properties.Details = { rich_text: [{ text: { content: String(payload.details) } }] };
-    const page = notionRequest_('/v1/pages', 'post', {
-      parent: { type: 'data_source_id', data_source_id: APP.DS.TASKS },
-      properties: properties
-    });
-    return { ok: true, id: page.id, url: page.url };
-  }
-
-  if (type === 'note') {
-    const title = String(payload.title || '').trim();
-    if (!title) throw new Error('Note title is required.');
-    const properties = {
-      Title: { title: [{ text: { content: title } }] },
-      Area: { select: { name: payload.area || 'Personal' } },
-      Status: { select: { name: 'Draft' } },
-      Type: { select: { name: payload.noteType || 'Reference' } },
-      Date: { date: { start: Utilities.formatDate(new Date(), APP.TZ, 'yyyy-MM-dd') } }
-    };
-    const page = notionRequest_('/v1/pages', 'post', {
-      parent: { type: 'data_source_id', data_source_id: APP.DS.NOTES },
-      properties: properties,
-      children: payload.body ? [{ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: String(payload.body) } }] } }] : []
-    });
-    return { ok: true, id: page.id, url: page.url };
-  }
-
-  throw new Error('Unknown quick-capture type.');
+  if (String(type || '').toLowerCase() === 'wishlist') return appendWishlist_(payload || {});
+  return createQuickItemSheet_(type, payload);
 }
 
 function appendWishlist_(payload) {
@@ -850,9 +450,6 @@ const DASHBOARD_TABLES = Object.freeze({
   Notes: ['ID','Title','Area','Status','Type','Date','Body','Source URL']
 });
 
-function useSheetsBackend_() {
-  return PropertiesService.getScriptProperties().getProperty('DATA_BACKEND') === 'sheets';
-}
 
 function dashboardSpreadsheet_() {
   const id = PropertiesService.getScriptProperties().getProperty('DASHBOARD_DATA_SHEET_ID');
@@ -1208,190 +805,26 @@ function createQuickItemSheet_(type, payload) {
   throw new Error('Unknown quick-capture type.');
 }
 
-function notionBlockText_(pageId) {
-  try {
-    const res = notionRequest_('/v1/blocks/' + pageId + '/children?page_size=100','get');
-    return (res.results||[]).map(function(b){
-      const obj=b[b.type]||{},rt=obj.rich_text||[];
-      return rt.map(function(x){return x.plain_text||(x.text&&x.text.content)||'';}).join('');
-    }).filter(Boolean).join('\n');
-  } catch (e) { return ''; }
-}
-
-function migrateOffNotion() {
-  const props=PropertiesService.getScriptProperties();
-  if (!props.getProperty('NOTION_TOKEN')) throw new Error('NOTION_TOKEN is required for the one-time migration.');
-  const ss=createDashboardDataStore_();
-
-  const settings=getDashboardSettings_().map(function(x){return {
-    'Setting':x.setting,'Group':x.group,'Value':x.value,'Number':x.number,'Enabled':x.enabled,
-    'Order':x.order,'Accent':x.accent,'Japanese':x.japanese,'Notes':x.notes
-  };});
-
-  const taskPages=notionQueryAll_(APP.DS.TASKS,{page_size:100});
-  const tasks=taskPages.map(function(page){
-    const t=taskFromNotion_(page);return {
-      'ID':page.id,'Task':t.title,'Status':t.status,'Priority':t.priority,'Area':t.area,
-      'Due':t.due||'','Done':t.done,'Details':t.details,'Course':t.course||'','Source URL':page.url||''
-    };
-  });
-
-  const projectPages=notionQueryAll_(APP.DS.PROJECTS,{page_size:100});
-  const projects=projectPages.map(function(page){return {
-    'ID':page.id,'Name':notionText_(page.properties.Name),'Status':notionSelect_(page.properties.Status),
-    'Phase':notionSelect_(page.properties.Phase),'Priority':notionSelect_(page.properties.Priority),
-    'Progress':notionNumber_(page.properties.Progress),'Target Date':notionDate_(page.properties['Target Date'])||'',
-    'Summary':notionText_(page.properties.Summary),'Area':notionSelect_(page.properties.Area),
-    'Budget':notionNumber_(page.properties.Budget),'Source URL':page.url||''
-  };});
-
-  const healthPages=notionQueryAll_(APP.DS.CHECKINS,{page_size:100});
-  const health=healthPages.map(function(page){return {
-    'ID':page.id,'Date':notionDate_(page.properties.Date)||'','Type':notionSelect_(page.properties.Type),
-    'Morning Weight (lb)':notionNumber_(page.properties['Morning Weight (lb)']),
-    'Sleep Hours':notionNumber_(page.properties['Sleep Hours']),'Sleep Score':notionNumber_(page.properties['Sleep Score']),
-    'HRV':notionNumber_(page.properties.HRV),'Resting HR':notionNumber_(page.properties['Resting HR']),
-    'Steps':notionNumber_(page.properties.Steps),'Protein (g)':notionNumber_(page.properties['Protein (g)']),
-    'Body Battery':notionNumber_(page.properties['Body Battery']),'Energy':notionNumber_(page.properties.Energy),
-    'Stress':notionNumber_(page.properties.Stress),'Soreness':notionNumber_(page.properties.Soreness),
-    'Mood':notionSelect_(page.properties.Mood)
-  };});
-
-  const cardPages=notionQueryAll_(APP.DS.HABIT_CARDS,{sorts:[{property:'Order',direction:'ascending'}],page_size:100});
-  const habits=cardPages.map(function(page){
-    const rel=notionRelationIds_(page.properties.Habit);
-    return {'Card ID':page.id,'Habit ID':rel[0]||'','Name':notionText_(page.properties.Name),
-      'Color':notionSelect_(page.properties.Color),'Order':notionNumber_(page.properties.Order),'Active':true};
-  }).filter(function(x){return x['Name']&&x['Habit ID'];});
-  const byCard={},byHabit={};habits.forEach(function(h){byCard[h['Card ID']]=h;byHabit[h['Habit ID']]=h;});
-
-  const logPages=notionQueryAll_(APP.DS.HABIT_HISTORY,{page_size:100});
-  const history=logPages.map(function(page){
-    const cardRel=notionRelationIds_(page.properties['Habit Card']),habitRel=notionRelationIds_(page.properties.Habit);
-    const cardId=cardRel[0]||'',habitId=habitRel[0]||'',h=byCard[cardId]||byHabit[habitId]||{};
-    return {'ID':page.id,'Date':notionDate_(page.properties.Date)||'','Habit Card ID':cardId||h['Card ID']||'',
-      'Habit ID':habitId||h['Habit ID']||'','Habit Name':h['Name']||notionText_(page.properties.Name)||''};
-  }).filter(function(x){return x['Date'];});
-
-  const notePages=notionQueryAll_(APP.DS.NOTES,{page_size:100});
-  const notes=notePages.map(function(page){return {
-    'ID':page.id,'Title':notionText_(page.properties.Title),'Area':notionSelect_(page.properties.Area),
-    'Status':notionSelect_(page.properties.Status),'Type':notionSelect_(page.properties.Type),
-    'Date':notionDate_(page.properties.Date)||'','Body':notionBlockText_(page.id),'Source URL':page.url||''
-  };});
-
-  writeTableObjects_(ss,'Settings',settings);
-  writeTableObjects_(ss,'Tasks',tasks);
-  writeTableObjects_(ss,'Projects',projects);
-  writeTableObjects_(ss,'Health',health);
-  writeTableObjects_(ss,'Habits',habits);
-  writeTableObjects_(ss,'HabitHistory',history);
-  writeTableObjects_(ss,'Notes',notes);
-
-  props.setProperty('DATA_BACKEND','sheets');
-  const result={
-    ok:true,backend:'sheets',spreadsheetId:ss.getId(),spreadsheetUrl:ss.getUrl(),
-    counts:{settings:settings.length,tasks:tasks.length,projects:projects.length,health:health.length,habits:habits.length,habitHistory:history.length,notes:notes.length}
-  };
-  Logger.log(JSON.stringify(result,null,2));
-  return result;
-}
 
 function validateSheetsBackend() {
-  const info=getDashboardDataStoreInfo();
-  const counts={};
-  Object.keys(DASHBOARD_TABLES).forEach(function(name){ counts[name]=sheetObjects_(name).length; });
-  const result={ok:useSheetsBackend_(),backend:info.backend,spreadsheetUrl:info.spreadsheetUrl,counts:counts};
-  Logger.log(JSON.stringify(result,null,2));
+  const info = getDashboardDataStoreInfo();
+  const counts = {};
+  Object.keys(DASHBOARD_TABLES).forEach(function(name) { counts[name] = sheetObjects_(name).length; });
+  const result = { ok: true, backend: 'sheets', spreadsheetUrl: info.spreadsheetUrl, counts: counts };
+  Logger.log(JSON.stringify(result, null, 2));
   return result;
 }
 
-function rollbackToNotionBackend() {
-  PropertiesService.getScriptProperties().deleteProperty('DATA_BACKEND');
-  return {ok:true,backend:'notion'};
-}
 
 function getDashboardDataStoreInfo() {
-  const props=PropertiesService.getScriptProperties(),id=props.getProperty('DASHBOARD_DATA_SHEET_ID');
-  return {backend:useSheetsBackend_()?'sheets':'notion',spreadsheetId:id||'',spreadsheetUrl:id?SpreadsheetApp.openById(id).getUrl():''};
-}
-
-
-function notionRequest_(path, method, body) {
-  const token = PropertiesService.getScriptProperties().getProperty('NOTION_TOKEN');
-  if (!token) throw new Error('NOTION_TOKEN is not configured in Script Properties.');
-
-  const options = {
-    method: String(method || 'get').toUpperCase(),
-    headers: {
-      Authorization: 'Bearer ' + token,
-      'Notion-Version': APP.NOTION_VERSION,
-      'Content-Type': 'application/json'
-    },
-    muteHttpExceptions: true
+  const id = PropertiesService.getScriptProperties().getProperty('DASHBOARD_DATA_SHEET_ID');
+  return {
+    backend: 'sheets',
+    spreadsheetId: id || '',
+    spreadsheetUrl: id ? SpreadsheetApp.openById(id).getUrl() : ''
   };
-  if (body !== undefined && body !== null) options.payload = JSON.stringify(body);
-
-  const resp = UrlFetchApp.fetch('https://api.notion.com' + path, options);
-  const code = resp.getResponseCode();
-  const text = resp.getContentText();
-  if (code < 200 || code >= 300) throw new Error('Notion ' + code + ': ' + text);
-  return text ? JSON.parse(text) : {};
 }
 
-function notionQueryAll_(dataSourceId, body) {
-  body = Object.assign({}, body || {});
-  const out = [];
-  let cursor = null;
-  let pages = 0;
-  do {
-    if (cursor) body.start_cursor = cursor;
-    const res = notionRequest_('/v1/data_sources/' + dataSourceId + '/query', 'post', body);
-    (res.results || []).forEach(function(x) { out.push(x); });
-    cursor = res.has_more ? res.next_cursor : null;
-    pages++;
-  } while (cursor && pages < 10);
-  return out;
-}
-
-function notionText_(p) {
-  if (!p) return '';
-  const list = p.title || p.rich_text || [];
-  if (Array.isArray(list)) return list.map(function(x) { return x.plain_text || (x.text && x.text.content) || ''; }).join('');
-  if (p.formula && typeof p.formula.string === 'string') return p.formula.string;
-  return '';
-}
-
-function notionSelect_(p) {
-  if (!p) return '';
-  if (p.select) return p.select.name || '';
-  if (p.status) return p.status.name || '';
-  return '';
-}
-
-function notionNumber_(p) {
-  if (!p) return null;
-  if (typeof p.number === 'number') return p.number;
-  if (p.formula && typeof p.formula.number === 'number') return p.formula.number;
-  return null;
-}
-
-function notionCheckbox_(p) {
-  if (!p) return false;
-  if (typeof p.checkbox === 'boolean') return p.checkbox;
-  if (p.formula && typeof p.formula.boolean === 'boolean') return p.formula.boolean;
-  return false;
-}
-
-function notionDate_(p) {
-  if (!p || !p.date) return null;
-  return p.date.start || null;
-}
-
-function notionRelationIds_(p) {
-  if (!p || !Array.isArray(p.relation)) return [];
-  return p.relation.map(function(x) { return x.id; }).filter(Boolean);
-}
 
 function round1_(n) {
   return Math.round(Number(n) * 10) / 10;
