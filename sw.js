@@ -3,13 +3,13 @@ const SHELL=[
   './',
   './index.html',
   './manifest.webmanifest?v=2',
-  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@620b3d236363be8e3343907dcdf040ea24b869f4/styles.css',
+  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@a160393509e47691ba6a2aedfb97f3a1e9d73c09/styles.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@76c6828a396111511e099c4463204031a63523e1/backgrounds.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@1567cb986cf637e80f8d13b933866ae7b24dc74a/page-backgrounds.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@01ea40e3eb367dfa03f3d4150f05fa9e79bebaee/section-backgrounds.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@0c9950df33d55ab6b7786e7f4a6a1909913ff152/standalone.css',
-  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@0928585a82f28833b7b2aab5cbb866e3c92f838b/standalone.js',
-  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@f60ca56966f4ccae10ec5d5f63106797cb3112b3/app.js'
+  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@b63725c481672afee43c17d7148aaa883d26397d/standalone.js',
+  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@c014cb1b493b785c5829443d7ffec9c5394a30b9/app.js'
 ];
 
 self.addEventListener('install',event=>{
