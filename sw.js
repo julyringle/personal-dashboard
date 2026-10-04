@@ -1,15 +1,15 @@
-const CACHE='personal-dashboard-shell-v4';
+const CACHE='personal-dashboard-shell-v5';
 const SHELL=[
   './',
   './index.html',
   './manifest.webmanifest?v=2',
-  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@8f74aeb62800c06a57d6e15eb0125dc0bebca006/styles.css',
+  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@d0d51608c896788ee6afd48ecc5360a5c69e24b8/styles.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@76c6828a396111511e099c4463204031a63523e1/backgrounds.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@1567cb986cf637e80f8d13b933866ae7b24dc74a/page-backgrounds.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@01ea40e3eb367dfa03f3d4150f05fa9e79bebaee/section-backgrounds.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@0c9950df33d55ab6b7786e7f4a6a1909913ff152/standalone.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@7baf5614c8739128cf8d70c2f8291fec390a2456/standalone.js',
-  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@a8e1f0835b63cb79df7db6bcbd4233839fce3a0d/app.js'
+  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@0a553c430c509682ea1cd06c3aa1dc7515d1b598/app.js'
 ];
 
 self.addEventListener('install',event=>{
