@@ -4,6 +4,8 @@
   const DEFAULT_CLIENT_ID='768938791390-06nk1l8csltji5vsmah53oub1kninm1b.apps.googleusercontent.com';
   const DEFAULT_SCRIPT_ID='1PzhUVJDtTUuoBiG6k5jamDylCbGisMfEjdkc71do4mU_i1qaeT0Y0OOQ';
   const DASHBOARD_SHEET_ID='1YO8y-6BI_9caO1hOmU5vSF8xQzZFId6q6Pj8gJSGZfg';
+  const OFFLINE_DB='pdOfflineV1';
+  const LAST_SYNC_KEY='pdLastSyncAtV1';
   const SCOPES=[
     'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/spreadsheets',
@@ -235,26 +237,344 @@
     await sheetsApi(token,'values/'+encodeURIComponent('Tasks!A:M')+':append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS',{method:'POST',body:{values:[row]}});
     return {ok:true,id:row[0]};
   }
+
+  async function updateTaskDirect(token,taskId,payload){
+    payload=payload||{};
+    const values=await taskSheetValues(token),h=taskHeaderMap(values),id=String(taskId||'');
+    for(let i=1;i<values.length;i++){
+      if(String(values[i][h['ID']]||'')!==id)continue;
+      const n=i+1,row=values[i],wasDone=boolish(row[h['Done']]);
+      const done=payload.done===undefined?wasDone:boolish(payload.done);
+      const completed=done?(row[h['Completed At']]||new Date().toISOString()):'';
+      const updates=[
+        {range:'Tasks!B'+n,values:[[String(payload.title??row[h['Task']]??'').trim()]]},
+        {range:'Tasks!C'+n,values:[[done?'Done':'To Do']]},
+        {range:'Tasks!D'+n,values:[[payload.priority??row[h['Priority']]??'']]},
+        {range:'Tasks!E'+n,values:[[payload.area??row[h['Area']]??'']]},
+        {range:'Tasks!F'+n,values:[[payload.due??normalizeDateKey(row[h['Due']])??'']]},
+        {range:'Tasks!G'+n,values:[[done]]},
+        {range:'Tasks!H'+n,values:[[payload.details??row[h['Details']]??'']]},
+        {range:'Tasks!I'+n,values:[[payload.course??row[h['Course']]??'']]},
+        {range:'Tasks!K'+n,values:[[payload.repeat??row[h['Repeat']]??'']]},
+        {range:'Tasks!L'+n,values:[[payload.repeatUntil??normalizeDateKey(row[h['Repeat Until']])??'']]},
+        {range:'Tasks!M'+n,values:[[completed]]}
+      ];
+      await batchTaskUpdates(token,updates);
+      return {ok:true,id,done};
+    }
+    throw new Error('Task not found.');
+  }
+
+  async function deleteTaskDirect(token,taskId){
+    const values=await taskSheetValues(token),h=taskHeaderMap(values),id=String(taskId||'');
+    for(let i=1;i<values.length;i++){
+      if(String(values[i][h['ID']]||'')!==id)continue;
+      const n=i+1;
+      await batchTaskUpdates(token,[
+        {range:'Tasks!C'+n,values:[['Archived']]},
+        {range:'Tasks!G'+n,values:[[true]]},
+        {range:'Tasks!M'+n,values:[[new Date().toISOString()]]}
+      ]);
+      return {ok:true,id,deleted:true};
+    }
+    throw new Error('Task not found.');
+  }
+
+
+  function openOfflineDb(){
+    return new Promise((resolve,reject)=>{
+      const req=indexedDB.open(OFFLINE_DB,1);
+      req.onupgradeneeded=()=>{
+        const db=req.result;
+        if(!db.objectStoreNames.contains('cache'))db.createObjectStore('cache',{keyPath:'key'});
+        if(!db.objectStoreNames.contains('queue'))db.createObjectStore('queue',{keyPath:'id',autoIncrement:true});
+      };
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>reject(req.error);
+    });
+  }
+  async function dbGet(store,key){
+    const db=await openOfflineDb();
+    return new Promise((resolve,reject)=>{
+      const req=db.transaction(store,'readonly').objectStore(store).get(key);
+      req.onsuccess=()=>resolve(req.result||null);req.onerror=()=>reject(req.error);
+    });
+  }
+  async function dbPut(store,value){
+    const db=await openOfflineDb();
+    return new Promise((resolve,reject)=>{
+      const req=db.transaction(store,'readwrite').objectStore(store).put(value);
+      req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+    });
+  }
+  async function dbAdd(store,value){
+    const db=await openOfflineDb();
+    return new Promise((resolve,reject)=>{
+      const req=db.transaction(store,'readwrite').objectStore(store).add(value);
+      req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+    });
+  }
+  async function dbDelete(store,key){
+    const db=await openOfflineDb();
+    return new Promise((resolve,reject)=>{
+      const req=db.transaction(store,'readwrite').objectStore(store).delete(key);
+      req.onsuccess=()=>resolve(true);req.onerror=()=>reject(req.error);
+    });
+  }
+  async function dbAll(store){
+    const db=await openOfflineDb();
+    return new Promise((resolve,reject)=>{
+      const req=db.transaction(store,'readonly').objectStore(store).getAll();
+      req.onsuccess=()=>resolve(req.result||[]);req.onerror=()=>reject(req.error);
+    });
+  }
+  function cacheKey(method,args){return method+'::'+JSON.stringify(args||[])}
+  const CACHEABLE=new Set(['getBootstrapData','getTaskDashboardData','getCalendarWeek','getHabitDashboardData','getCollectionData']);
+  async function readCached(method,args){return dbGet('cache',cacheKey(method,args))}
+  async function writeCached(method,args,value){
+    await dbPut('cache',{key:cacheKey(method,args),method,args:args||[],value,at:Date.now()});
+  }
+  async function queueCount(){return (await dbAll('queue')).length}
+  function setLastSync(){localStorage.setItem(LAST_SYNC_KEY,String(Date.now()))}
+  function emitState(extra={}){
+    const state={
+      online:navigator.onLine,
+      queued:0,
+      lastSync:Number(localStorage.getItem(LAST_SYNC_KEY)||0)||null,
+      needsAuth:!savedToken()&&navigator.onLine,
+      fromCache:false,
+      ...extra
+    };
+    window.dashboardOfflineState=state;
+    queueCount().then(n=>{
+      state.queued=n;window.dashboardOfflineState=state;
+      window.dispatchEvent(new CustomEvent('dashboard-sync-state',{detail:state}));
+    }).catch(()=>window.dispatchEvent(new CustomEvent('dashboard-sync-state',{detail:state})));
+  }
+  function cloneValue(v){return v==null?v:JSON.parse(JSON.stringify(v))}
+  function patchTaskTree(value,id,mode,payload){
+    if(Array.isArray(value)){
+      const out=[];
+      value.forEach(item=>{
+        const p=patchTaskTree(item,id,mode,payload);
+        if(p!==null)out.push(p);
+      });
+      return out;
+    }
+    if(!value||typeof value!=='object')return value;
+    if(String(value.id||'')===String(id)&&('title'in value||'done'in value)){
+      if(mode==='delete')return null;
+      const x={...value};
+      if(mode==='toggle'){x.done=!x.done;x.status=x.done?'Done':'To Do';x.completedAt=x.done?new Date().toISOString():null;}
+      if(mode==='update'){
+        if(payload.title!==undefined)x.title=payload.title;
+        if(payload.priority!==undefined)x.priority=payload.priority;
+        if(payload.area!==undefined)x.area=payload.area;
+        if(payload.due!==undefined)x.due=payload.due||null;
+        if(payload.details!==undefined)x.details=payload.details;
+        if(payload.course!==undefined)x.course=payload.course;
+        if(payload.repeat!==undefined)x.repeat=payload.repeat;
+        if(payload.repeatUntil!==undefined)x.repeatUntil=payload.repeatUntil||null;
+        if(payload.done!==undefined){x.done=boolish(payload.done);x.status=x.done?'Done':'To Do';x.completedAt=x.done?(x.completedAt||new Date().toISOString()):null;}
+      }
+      return x;
+    }
+    const out={};
+    Object.keys(value).forEach(k=>{out[k]=patchTaskTree(value[k],id,mode,payload)});
+    return out;
+  }
+  async function mutateCaches(mutator){
+    const records=await dbAll('cache');
+    for(const rec of records){
+      const value=mutator(cloneValue(rec.value),rec);
+      if(value!==undefined)await dbPut('cache',{...rec,value,at:Date.now()});
+    }
+  }
+  async function patchTaskCaches(id,mode,payload={}){
+    await mutateCaches(value=>patchTaskTree(value,id,mode,payload));
+  }
+  async function findCachedTask(id){
+    const rec=await readCached('getTaskDashboardData',[]);
+    if(rec&&rec.value){
+      const all=[...(rec.value.open||[]),...(rec.value.completed||[])];
+      const t=all.find(x=>String(x.id)===String(id));if(t)return t;
+    }
+    const boot=await readCached('getBootstrapData',[]);
+    if(boot&&boot.value){
+      const all=[...(boot.value.focus||[]),...(boot.value.school||[]),...(boot.value.projectTasks||[])];
+      return all.find(x=>String(x.id)===String(id))||null;
+    }
+    return null;
+  }
+  async function patchHabitCaches(cardId,desiredDone){
+    await mutateCaches(value=>{
+      function walk(v){
+        if(Array.isArray(v))return v.map(walk);
+        if(!v||typeof v!=='object')return v;
+        const x={...v};
+        if(String(x.cardId||'')===String(cardId)&&'done'in x){x.done=desiredDone;x.logId=desiredDone?('offline-'+Date.now()):null;}
+        Object.keys(x).forEach(k=>{if(k!=='cardId'&&k!=='done'&&k!=='logId')x[k]=walk(x[k])});
+        return x;
+      }
+      return walk(value);
+    });
+  }
+  async function addTaskToCaches(task){
+    const rec=await readCached('getTaskDashboardData',[]);
+    if(rec&&rec.value){
+      const v=cloneValue(rec.value);v.open=[task,...(v.open||[])];await writeCached('getTaskDashboardData',[],v);
+    }
+    const boot=await readCached('getBootstrapData',[]);
+    if(boot&&boot.value){
+      const v=cloneValue(boot.value);
+      if(task.due)v.focus=[task,...(v.focus||[])].slice(0,25);
+      if(task.area==='School')v.school=[task,...(v.school||[])];
+      if(task.area==='Projects')v.projectTasks=[task,...(v.projectTasks||[])];
+      await writeCached('getBootstrapData',[],v);
+    }
+  }
+  async function queueWrite(method,args){
+    await dbAdd('queue',{method,args:args||[],createdAt:Date.now()});
+    emitState({fromCache:true});
+  }
+  async function offlineWrite(method,args){
+    if(method==='toggleTask'){
+      const id=args&&args[0],task=await findCachedTask(id);if(!task)throw new Error('Task is not available offline yet.');
+      const done=!task.done;await patchTaskCaches(id,'toggle');await queueWrite(method,args);return{ok:true,id,done,offline:true};
+    }
+    if(method==='updateTask'){
+      const id=args&&args[0],payload=(args&&args[1])||{};
+      await patchTaskCaches(id,'update',payload);await queueWrite(method,args);return{ok:true,id,done:boolish(payload.done),offline:true};
+    }
+    if(method==='deleteTask'){
+      const id=args&&args[0];await patchTaskCaches(id,'delete');await queueWrite(method,args);return{ok:true,id,deleted:true,offline:true};
+    }
+    if(method==='toggleHabit'){
+      const payload=(args&&args[0])||{},boot=await readCached('getBootstrapData',[]);
+      const h=boot&&boot.value&&(boot.value.habits||[]).find(x=>String(x.cardId)===String(payload.cardId));
+      if(!h)throw new Error('Habit is not available offline yet.');
+      const desiredDone=!h.done;
+      await patchHabitCaches(payload.cardId,desiredDone);
+      await queueWrite('setHabitState',[{cardId:payload.cardId,habitId:payload.habitId,desiredDone}]);
+      return{done:desiredDone,logId:desiredDone?('offline-'+Date.now()):null,offline:true};
+    }
+    if(method==='createQuickItem'&&args&&['task','school_task'].includes(String(args[0]||'').toLowerCase())){
+      const type=String(args[0]).toLowerCase(),p=args[1]||{},id=(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():(Date.now()+'-'+Math.random().toString(16).slice(2));
+      const task={id,title:String(p.title||'').trim(),status:'To Do',priority:p.priority||'',area:type==='school_task'?'School':(p.area||'Personal'),due:p.due||null,done:false,details:p.details||'',course:p.course||'',repeat:p.repeat||'',repeatUntil:p.repeatUntil||null,completedAt:null};
+      if(!task.title)throw new Error('Task title is required.');
+      await addTaskToCaches(task);await queueWrite(method,[type,{...p,__offlineId:id}]);return{ok:true,id,offline:true};
+    }
+    throw new Error('This action needs an internet connection.');
+  }
+  async function performQueued(cfg,token,item){
+    if(item.method==='setHabitState'){
+      const wanted=(item.args&&item.args[0])||{};
+      const boot=await execute(cfg,token,'getBootstrapData',[]);
+      const h=(boot.habits||[]).find(x=>String(x.cardId)===String(wanted.cardId));
+      if(h&&Boolean(h.done)!==Boolean(wanted.desiredDone)){
+        await execute(cfg,token,'toggleHabit',[{cardId:h.cardId,habitId:h.habitId,logId:h.logId}]);
+      }
+      return{ok:true};
+    }
+    return performOnlineWrite(cfg,token,item.method,item.args||[]);
+  }
+  async function flushQueue(cfg,token){
+    const items=(await dbAll('queue')).sort((a,b)=>Number(a.id)-Number(b.id));
+    for(const item of items){
+      await performQueued(cfg,token,item);
+      await dbDelete('queue',item.id);
+    }
+    if(items.length)setLastSync();
+    emitState({needsAuth:false});
+    return items.length;
+  }
+  async function performOnlineWrite(cfg,token,method,args){
+    if(method==='toggleTask')return toggleTaskDirect(token,args&&args[0]);
+    if(method==='updateTask')return updateTaskDirect(token,args&&args[0],args&&args[1]);
+    if(method==='deleteTask')return deleteTaskDirect(token,args&&args[0]);
+    if(method==='createQuickItem'&&args&&['task','school_task'].includes(String(args[0]||'').toLowerCase())){
+      const p={...(args[1]||{})};delete p.__offlineId;return createTaskDirect(token,String(args[0]).toLowerCase(),p);
+    }
+    return execute(cfg,token,method,args);
+  }
+  function isWrite(method,args){
+    return ['toggleTask','updateTask','deleteTask','toggleHabit'].includes(method)||
+      (method==='createQuickItem'&&args&&['task','school_task'].includes(String(args[0]||'').toLowerCase()));
+  }
   async function dispatch(cfg,token,method,args){
     if(method==='getBootstrapData')return execute(cfg,token,method,args);
     if(method==='getTaskDashboardData')return getTaskDashboardDataDirect(token);
     if(method==='toggleTask')return toggleTaskDirect(token,args&&args[0]);
+    if(method==='updateTask')return updateTaskDirect(token,args&&args[0],args&&args[1]);
+    if(method==='deleteTask')return deleteTaskDirect(token,args&&args[0]);
     if(method==='createQuickItem'&&args&&['task','school_task'].includes(String(args[0]||'').toLowerCase()))return createTaskDirect(token,String(args[0]).toLowerCase(),args[1]||{});
     return execute(cfg,token,method,args);
   }
 
   window.dashboardRemoteRun=async function(method,args){
+    args=args||[];
+    const cached=CACHEABLE.has(method)?await readCached(method,args):null;
+    if(!navigator.onLine){
+      if(isWrite(method,args))return offlineWrite(method,args);
+      if(cached){emitState({fromCache:true,needsAuth:false});return cloneValue(cached.value)}
+      throw new Error('OFFLINE // No saved copy of this data yet.');
+    }
+
     const cfg=await ensureConfig();
-    let token=await ensureToken(cfg,false);
+    let token=savedToken();
+
+    if(!token&&CACHEABLE.has(method)&&cached){
+      emitState({fromCache:true,needsAuth:true});
+      return cloneValue(cached.value);
+    }
+
     try{
-      return await dispatch(cfg,token,method,args);
+      if(!token)token=await ensureToken(cfg,false);
+      await flushQueue(cfg,token);
+      const result=await dispatch(cfg,token,method,args);
+      if(CACHEABLE.has(method))await writeCached(method,args,result);
+      setLastSync();emitState({fromCache:false,needsAuth:false});
+      return result;
     }catch(err){
-      if(!err.auth) throw err;
-      localStorage.removeItem(TOKEN_KEY);
-      token=await ensureToken(cfg,true);
-      return dispatch(cfg,token,method,args);
+      if(err.auth){
+        localStorage.removeItem(TOKEN_KEY);
+        if(CACHEABLE.has(method)&&cached){emitState({fromCache:true,needsAuth:true});return cloneValue(cached.value)}
+        token=await ensureToken(cfg,true);
+        await flushQueue(cfg,token);
+        const result=await dispatch(cfg,token,method,args);
+        if(CACHEABLE.has(method))await writeCached(method,args,result);
+        setLastSync();emitState({fromCache:false,needsAuth:false});
+        return result;
+      }
+      const networkish=!navigator.onLine||/failed to fetch|network|load failed|offline/i.test(String(err&&err.message||err));
+      if(networkish&&isWrite(method,args))return offlineWrite(method,args);
+      if(CACHEABLE.has(method)&&cached){emitState({fromCache:true});return cloneValue(cached.value)}
+      throw err;
     }
   };
+
+
+  window.forceDashboardSync=async function(){
+    if(!navigator.onLine){emitState({fromCache:true,needsAuth:false});return false}
+    const cfg=await ensureConfig();
+    let token=savedToken();
+    if(!token)token=await ensureToken(cfg,true);
+    await flushQueue(cfg,token);
+    const boot=await dispatch(cfg,token,'getBootstrapData',[]);
+    await writeCached('getBootstrapData',[],boot);
+    const tasks=await dispatch(cfg,token,'getTaskDashboardData',[]);
+    await writeCached('getTaskDashboardData',[],tasks);
+    setLastSync();emitState({fromCache:false,needsAuth:false});
+    location.reload();
+    return true;
+  };
+  window.addEventListener('online',async()=>{
+    emitState();
+    const token=savedToken();if(!token)return;
+    try{const cfg=await ensureConfig();await flushQueue(cfg,token)}catch(e){if(e&&e.auth)localStorage.removeItem(TOKEN_KEY)}
+  });
+  window.addEventListener('offline',()=>emitState({fromCache:true,needsAuth:false}));
+  emitState();
 
   window.resetDashboardConnection=function(){
     localStorage.removeItem(CONFIG_KEY);
