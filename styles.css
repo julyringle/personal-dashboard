@@ -255,3 +255,11 @@ body.route-changing #app{opacity:.35;transform:translateY(2px)}
 @media(max-width:760px){
   .status{display:block;order:2;margin-left:auto;font-size:8px;max-width:48vw;overflow:hidden;text-overflow:ellipsis}
 }
+
+/* current-day macros */
+.macro-panel{margin-bottom:10px}
+.macro-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;padding:10px}
+.macro-stat{border:1px solid #252b31;background:rgba(12,15,18,.92);border-radius:7px;padding:11px 10px;min-width:0}
+.macro-stat span,.macro-stat em{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:8px;letter-spacing:.09em;color:var(--muted);font-style:normal}
+.macro-stat b{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:22px;line-height:1;margin:7px 0 4px;color:var(--text)}
+@media(max-width:620px){.macro-grid{grid-template-columns:repeat(2,1fr)}}
