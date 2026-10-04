@@ -203,7 +203,10 @@ function taskEditFields(t){
     <div class="field"><label>Repeat until</label><input name="repeatUntil" type="date" value="${attr(t.repeatUntil||'')}"></div>
     <div class="field full"><label>Details</label><textarea name="details">${esc(t.details||'')}</textarea></div>`;
 }
-function openTaskDetails(id){
+async function openTaskDetails(id){
+  if(!STATE.taskDashboard){
+    try{STATE.taskDashboard=await server('getTaskDashboardData')}catch(e){}
+  }
   const t=findTaskById(id);if(!t)return;
   STATE.modalType='edit_task';STATE.editingTaskId=id;
   const backdrop=document.getElementById('modalBackdrop'),form=document.getElementById('quickForm'),title=document.getElementById('modalTitle');
