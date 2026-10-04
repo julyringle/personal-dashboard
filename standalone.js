@@ -236,10 +236,7 @@
     return {ok:true,id:row[0]};
   }
   async function dispatch(cfg,token,method,args){
-    if(method==='getBootstrapData'){
-      await rollRecurringTasksDirect(token);
-      return execute(cfg,token,method,args);
-    }
+    if(method==='getBootstrapData')return execute(cfg,token,method,args);
     if(method==='getTaskDashboardData')return getTaskDashboardDataDirect(token);
     if(method==='toggleTask')return toggleTaskDirect(token,args&&args[0]);
     if(method==='createQuickItem'&&args&&['task','school_task'].includes(String(args[0]||'').toLowerCase()))return createTaskDirect(token,String(args[0]).toLowerCase(),args[1]||{});
