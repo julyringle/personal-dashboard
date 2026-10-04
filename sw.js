@@ -51,12 +51,7 @@ self.addEventListener('fetch',event=>{
   if(!cacheable)return;
   event.respondWith((async()=>{
     const cached=await caches.match(req);
-    if(cached){
-      event.waitUntil(fetch(req).then(async live=>{
-        const cache=await caches.open(CACHE);await cache.put(req,live.clone());
-      }).catch(()=>{}));
-      return cached;
-    }
+    if(cached)return cached;
     try{
       const live=await fetch(req);
       const cache=await caches.open(CACHE);cache.put(req,live.clone()).catch(()=>{});
