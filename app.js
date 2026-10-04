@@ -2,7 +2,7 @@ const STATE = {
   route:(window.__INITIAL_VIEW__||'home'), bootstrap:null, weekOffset:0,
   collectionTab:(localStorage.getItem('dashboardCollectionTab')||'wishlist'), collectionCache:{},
   pokemonGen:'1', pokemonFilter:'all', wishlistCategory:'all', onePiecePage:'all',
-  modalType:null, habitDashboard:null, taskDashboard:null, taskFilter:'all'
+  modalType:null, editingTaskId:null, habitDashboard:null, taskDashboard:null, taskFilter:'all'
 };
 const GEN_COLORS={1:'#8E3E42',2:'#A8642A',3:'#A88D3E',4:'#4E725C',5:'#536979',6:'#6E547A',7:'#8A526C',8:'#79634F',9:'#73777C'};
 const RAFT_CONFIG={
@@ -49,11 +49,24 @@ function applyTheme(){
 }
 function updateClock(){
   const n=new Date(),el=document.getElementById('clock');if(!el)return;
-  const sync=STATE.bootstrap?.now?new Date(STATE.bootstrap.now):null;
+  const state=window.dashboardOfflineState||{};
+  const rawSync=state.lastSync||STATE.bootstrap?.now,sync=rawSync?new Date(rawSync):null;
   const syncText=sync&&!isNaN(sync)?` · SYNC ${new Intl.DateTimeFormat('en-US',{hour:'numeric',minute:'2-digit'}).format(sync)}`:'';
-  el.innerHTML=`${new Intl.DateTimeFormat('en-US',{month:'short',day:'2-digit'}).format(n).toUpperCase()} // <strong>${new Intl.DateTimeFormat('en-US',{hour:'2-digit',minute:'2-digit'}).format(n)}</strong>${syncText}`;
+  let connection='';
+  if(state.online===false)connection=' · <span class="conn-offline">OFFLINE</span>';
+  else if(state.needsAuth)connection=' · <span class="conn-warn">SYNC NEEDED</span>';
+  else if(Number(state.queued||0)>0)connection=` · <span class="conn-warn">${state.queued} QUEUED</span>`;
+  else if(state.fromCache)connection=' · <span class="conn-cache">CACHED</span>';
+  el.innerHTML=`${new Intl.DateTimeFormat('en-US',{month:'short',day:'2-digit'}).format(n).toUpperCase()} // <strong>${new Intl.DateTimeFormat('en-US',{hour:'2-digit',minute:'2-digit'}).format(n)}</strong>${syncText}${connection}`;
+  el.title=state.online===false?'Offline — showing saved data':state.needsAuth?'Click to sign in and sync':'Click to sync now';
 }
 setInterval(updateClock,30000);updateClock();
+window.addEventListener('dashboard-sync-state',updateClock);
+document.getElementById('clock')?.addEventListener('click',async()=>{
+  if(typeof window.forceDashboardSync!=='function')return;
+  const el=document.getElementById('clock');if(el)el.classList.add('syncing');
+  try{await window.forceDashboardSync()}catch(e){alert(e.message)}finally{if(el)el.classList.remove('syncing')}
+});
 
 document.querySelectorAll('[data-route]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.route)));
 function setPageChrome(route){
@@ -111,7 +124,7 @@ function taskRow(t,i){
   const due=t.due?new Date(t.due+'T12:00:00'):null,overdue=due&&due<startDay(new Date())&&!t.done;
   const repeat=t.repeat?` · ↻ ${esc(String(t.repeat).toUpperCase())}`:'';
   const meta=`${t.priority?`<span class="priority-${String(t.priority||'').toLowerCase()}">${esc(t.priority)}</span>`:''}${t.area?' · '+esc(t.area):''}${t.course?' · '+esc(t.course):''}${repeat}`;
-  return `<div class="task-row ${t.done?'task-done':''}" data-task-row="${attr(t.id)}"><button class="task-check ${t.done?'on':''}" data-task-id="${attr(t.id)}" data-task-title="${attr(t.title)}" aria-label="${t.done?'Mark not done':'Mark done'}">${t.done?'✓':''}</button><div><div class="task-title">${esc(t.title)}</div><div class="task-meta">${meta}</div></div><div class="due ${overdue?'overdue':''}">${t.due?fmtDate(t.due+'T12:00:00',{month:'short',day:'2-digit'}).toUpperCase():'—'}</div></div>`;
+  return `<div class="task-row ${t.done?'task-done':''}" data-task-row="${attr(t.id)}"><button class="task-check ${t.done?'on':''}" data-task-id="${attr(t.id)}" data-task-title="${attr(t.title)}" aria-label="${t.done?'Mark not done':'Mark done'}">${t.done?'✓':''}</button><button class="task-open" data-task-open="${attr(t.id)}" type="button"><div class="task-title">${esc(t.title)}</div><div class="task-meta">${meta}</div></button><div class="due ${overdue?'overdue':''}">${t.due?fmtDate(t.due+'T12:00:00',{month:'short',day:'2-digit'}).toUpperCase():'—'}</div></div>`;
 }
 function healthPanel(h){
   if(!h||!h.latest)return panel('HEALTH','健康','<div class="empty">NO RECENT CHECK-IN</div>',{right:'<button class="panel-link" data-open-route="health">OPEN →</button>'});
@@ -136,6 +149,7 @@ function collectionLaunchPanel(){return panel('COLLECTIONS','収集',`<div class
 
 
 function bindTaskToggles(){
+  document.querySelectorAll('[data-task-open]').forEach(btn=>btn.onclick=e=>{e.preventDefault();e.stopPropagation();openTaskDetails(btn.dataset.taskOpen)});
   document.querySelectorAll('.task-check[data-task-id]').forEach(btn=>{
     btn.onclick=async e=>{
       e.preventDefault();e.stopPropagation();
@@ -161,6 +175,44 @@ function showTaskUndo(id,title){
   b.onclick=async()=>{try{await server('toggleTask',id);STATE.bootstrap=await server('getBootstrapData');STATE.taskDashboard=null;if(STATE.route==='tasks')await renderTasksPage();else navigate(STATE.route)}catch(err){alert(err.message)}toast.classList.remove('show')};
   clearTimeout(window.__taskToastTimer);
   window.__taskToastTimer=setTimeout(()=>toast.classList.remove('show'),7000);
+}
+
+
+function allKnownTasks(){
+  const buckets=[
+    ...(STATE.taskDashboard?.open||[]),...(STATE.taskDashboard?.completed||[]),
+    ...(STATE.bootstrap?.focus||[]),...(STATE.bootstrap?.school||[]),...(STATE.bootstrap?.projectTasks||[])
+  ];
+  const seen=new Set();return buckets.filter(t=>t&&t.id&&!seen.has(t.id)&&(seen.add(t.id),true));
+}
+function findTaskById(id){return allKnownTasks().find(t=>String(t.id)===String(id))||null}
+function ensureModalDelete(){
+  let b=document.getElementById('modalDelete');if(b)return b;
+  b=document.createElement('button');b.id='modalDelete';b.type='button';b.className='danger';b.textContent='DELETE';b.hidden=true;
+  const actions=document.querySelector('.modal-actions');actions?.insertBefore(b,actions.firstChild);return b;
+}
+function taskEditFields(t){
+  const option=(value,label,current)=>`<option value="${attr(value)}" ${String(current??'')===String(value)?'selected':''}>${esc(label)}</option>`;
+  return `<div class="field full"><label>Task</label><input name="title" value="${attr(t.title||'')}" required></div>
+    <div class="field"><label>Status</label><select name="done">${option('false','To Do',String(Boolean(t.done)))}${option('true','Done',String(Boolean(t.done)))}</select></div>
+    <div class="field"><label>Due</label><input name="due" type="date" value="${attr(t.due||'')}"></div>
+    <div class="field"><label>Priority</label><select name="priority">${option('','None',t.priority)}${option('High','High',t.priority)}${option('Medium','Medium',t.priority)}${option('Low','Low',t.priority)}</select></div>
+    <div class="field"><label>Area</label><select name="area">${['Personal','School','Career','Health','Projects','Collections'].map(x=>option(x,x,t.area)).join('')}</select></div>
+    <div class="field"><label>Course</label><input name="course" value="${attr(t.course||'')}" placeholder="EE 440"></div>
+    <div class="field"><label>Repeat</label><select name="repeat">${option('','Does not repeat',t.repeat)}${option('Daily','Daily',t.repeat)}${option('Weekly','Weekly',t.repeat)}${option('Monthly','Monthly',t.repeat)}${option('Yearly','Yearly',t.repeat)}</select></div>
+    <div class="field"><label>Repeat until</label><input name="repeatUntil" type="date" value="${attr(t.repeatUntil||'')}"></div>
+    <div class="field full"><label>Details</label><textarea name="details">${esc(t.details||'')}</textarea></div>`;
+}
+function openTaskDetails(id){
+  const t=findTaskById(id);if(!t)return;
+  STATE.modalType='edit_task';STATE.editingTaskId=id;
+  const backdrop=document.getElementById('modalBackdrop'),form=document.getElementById('quickForm'),title=document.getElementById('modalTitle');
+  title.textContent='TASK DETAILS // 編集';form.innerHTML=taskEditFields(t);ensureModalDelete().hidden=false;
+  backdrop.classList.add('open');setTimeout(()=>form.querySelector('input[name="title"]')?.focus(),40);
+}
+async function refreshTaskViews(){
+  STATE.taskDashboard=null;STATE.bootstrap=await server('getBootstrapData');
+  if(STATE.route==='tasks')await renderTasksPage();else navigate(STATE.route);
 }
 
 async function renderTasksPage(){
@@ -420,15 +472,32 @@ function renderProjectsPage(){
 bindTaskToggles();
 }
 
-function openQuick(type){STATE.modalType=type;const backdrop=document.getElementById('modalBackdrop'),form=document.getElementById('quickForm'),title=document.getElementById('modalTitle');title.textContent=({task:'NEW TASK // 新規',school_task:'SCHOOL TASK // 学業',note:'NEW NOTE // メモ',wishlist:'WISHLIST // 欲しい物'})[type]||'NEW ITEM';form.innerHTML=quickFields(type);backdrop.classList.add('open');setTimeout(()=>form.querySelector('input')?.focus(),40)}
+function openQuick(type){STATE.modalType=type;STATE.editingTaskId=null;ensureModalDelete().hidden=true;const backdrop=document.getElementById('modalBackdrop'),form=document.getElementById('quickForm'),title=document.getElementById('modalTitle');title.textContent=({task:'NEW TASK // 新規',school_task:'SCHOOL TASK // 学業',note:'NEW NOTE // メモ',wishlist:'WISHLIST // 欲しい物'})[type]||'NEW ITEM';form.innerHTML=quickFields(type);backdrop.classList.add('open');setTimeout(()=>form.querySelector('input')?.focus(),40)}
 function quickFields(type){
   if(type==='task'||type==='school_task')return `<div class="field full"><label>Task</label><input name="title" required></div><div class="field"><label>Due</label><input name="due" type="date"></div><div class="field"><label>Priority</label><select name="priority"><option value="">None</option><option>High</option><option>Medium</option><option>Low</option></select></div>${type==='task'?`<div class="field"><label>Area</label><select name="area"><option>Personal</option><option>School</option><option>Career</option><option>Health</option><option>Projects</option><option>Collections</option></select></div>`:''}<div class="field"><label>Repeat</label><select name="repeat"><option value="">Does not repeat</option><option>Daily</option><option>Weekly</option><option>Monthly</option><option>Yearly</option></select></div><div class="field"><label>Repeat until</label><input name="repeatUntil" type="date"></div><div class="field full"><label>Details</label><textarea name="details"></textarea></div>`;
   if(type==='note')return `<div class="field full"><label>Title</label><input name="title" required></div><div class="field"><label>Area</label><select name="area"><option>Personal</option><option>School</option><option>Career</option><option>Health</option><option>Projects</option><option>Collections</option></select></div><div class="field"><label>Type</label><select name="noteType"><option>Reference</option><option>Plan</option><option>Research</option><option>Decision</option><option>Test Result</option><option>Meeting Note</option><option>Journal</option></select></div><div class="field full"><label>Body</label><textarea name="body"></textarea></div>`;
   return `<div class="field full"><label>Item</label><input name="title" required></div><div class="field"><label>Category</label><input name="category" placeholder="Disc Golf, Tech, Clothing…"></div><div class="field"><label>Price</label><input name="price" placeholder="$99.99"></div><div class="field"><label>Store</label><input name="store"></div><div class="field"><label>Want level</label><select name="wantLevel"><option>Interested</option><option>High</option><option>Maybe</option></select></div><div class="field full"><label>Link</label><input name="link" type="url"></div>`;
 }
-function closeModal(){document.getElementById('modalBackdrop').classList.remove('open');STATE.modalType=null}
+function closeModal(){document.getElementById('modalBackdrop').classList.remove('open');const d=document.getElementById('modalDelete');if(d)d.hidden=true;STATE.modalType=null;STATE.editingTaskId=null}
 document.getElementById('modalClose').onclick=closeModal;document.getElementById('modalCancel').onclick=e=>{e.preventDefault();closeModal()};document.getElementById('modalBackdrop').addEventListener('click',e=>{if(e.target.id==='modalBackdrop')closeModal()});
-document.getElementById('modalSave').onclick=async e=>{e.preventDefault();const form=document.getElementById('quickForm');const fd=new FormData(form),payload={};for(const[k,v]of fd.entries())payload[k]=v;const btn=e.currentTarget;btn.disabled=true;btn.textContent='SAVING…';try{const savedType=STATE.modalType;await server('createQuickItem',savedType,payload);closeModal();STATE.collectionCache={};STATE.taskDashboard=null;STATE.bootstrap=await server('getBootstrapData');if(STATE.route==='home')renderHome();else if(STATE.route==='tasks')await renderTasksPage();else if(STATE.route==='collections')await renderCollections();else navigate(STATE.route)}catch(err){alert(err.message)}finally{btn.disabled=false;btn.textContent='SAVE'}};
+ensureModalDelete().onclick=async()=>{
+  if(STATE.modalType!=='edit_task'||!STATE.editingTaskId)return;
+  const t=findTaskById(STATE.editingTaskId);if(!confirm(`Delete "${t?.title||'this task'}"?`))return;
+  const btn=document.getElementById('modalDelete');btn.disabled=true;btn.textContent='DELETING…';
+  try{const id=STATE.editingTaskId;await server('deleteTask',id);closeModal();await refreshTaskViews()}catch(e){alert(e.message)}finally{btn.disabled=false;btn.textContent='DELETE'}
+};
+document.getElementById('modalSave').onclick=async e=>{
+  e.preventDefault();const form=document.getElementById('quickForm');const fd=new FormData(form),payload={};for(const[k,v]of fd.entries())payload[k]=v;
+  const btn=e.currentTarget;btn.disabled=true;btn.textContent='SAVING…';
+  try{
+    if(STATE.modalType==='edit_task'){
+      const id=STATE.editingTaskId;await server('updateTask',id,payload);closeModal();await refreshTaskViews();
+    }else{
+      const savedType=STATE.modalType;await server('createQuickItem',savedType,payload);closeModal();STATE.collectionCache={};STATE.taskDashboard=null;STATE.bootstrap=await server('getBootstrapData');
+      if(STATE.route==='home')renderHome();else if(STATE.route==='tasks')await renderTasksPage();else if(STATE.route==='collections')await renderCollections();else navigate(STATE.route);
+    }
+  }catch(err){alert(err.message)}finally{btn.disabled=false;btn.textContent='SAVE'}
+};
 document.addEventListener('keydown',e=>{if(e.target.matches('input,textarea,select'))return;if(e.key.toLowerCase()==='t')navigate('tasks');if(e.key.toLowerCase()==='h')navigate('habits');if(e.key.toLowerCase()==='c')navigate('collections')});
 
 init();
