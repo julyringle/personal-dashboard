@@ -148,8 +148,8 @@
     else return'';
     return d.toISOString().slice(0,10);
   }
-  async function sheetsApi(token,path,options={}){
-    const response=await fetch('https://sheets.googleapis.com/v4/spreadsheets/'+DASHBOARD_SHEET_ID+'/'+path,{
+  async function sheetsApiFor(token,spreadsheetId,path,options={}){
+    const response=await fetch('https://sheets.googleapis.com/v4/spreadsheets/'+encodeURIComponent(spreadsheetId)+'/'+path,{
       method:options.method||'GET',
       headers:{'Authorization':'Bearer '+token.accessToken,'Content-Type':'application/json'},
       body:options.body===undefined?undefined:JSON.stringify(options.body)
@@ -158,6 +158,9 @@
     if(response.status===401||response.status===403){const err=new Error((data.error&&data.error.message)||'Google authorization expired.');err.auth=true;throw err}
     if(!response.ok)throw new Error((data.error&&data.error.message)||('Google Sheets API error '+response.status));
     return data;
+  }
+  async function sheetsApi(token,path,options={}){
+    return sheetsApiFor(token,DASHBOARD_SHEET_ID,path,options);
   }
   async function healthSheetValues(token){
     const data=await sheetsApi(token,'values/'+encodeURIComponent('Health!A:R'));
@@ -205,8 +208,23 @@
       series:rows.slice().reverse()
     };
   }
-  async function getHealthSummaryDirect(token){
-    return healthSummaryFromValues(await healthSheetValues(token));
+  async function getNutritionTodayDirect(token,sourceId){
+    if(!sourceId)return null;
+    const data=await sheetsApiFor(token,sourceId,'values/'+encodeURIComponent('Nutrition Daily!A:Q'));
+    const values=data.values||[];if(values.length<2)return null;
+    const h=taskHeaderMap(values),today=dateKeyCentral(new Date());
+    const row=values.slice(1).find(r=>normalizeDateKey(r[h['Date']])===today);if(!row)return null;
+    const num=v=>{if(v===undefined||v===null||String(v).trim()==='')return null;const n=Number(v);return Number.isFinite(n)?n:null};
+    return {date:today,calories:num(row[h['Energy (kcal)']]),protein:num(row[h['Protein (g)']]),carbs:num(row[h['Carbs (g)']]),fat:num(row[h['Fat (g)']])};
+  }
+  async function getHealthSummaryDirect(token,sourceId){
+    const health=healthSummaryFromValues(await healthSheetValues(token));
+    if(!health)return health;
+    try{
+      const nutrition=await getNutritionTodayDirect(token,sourceId);
+      if(nutrition)health.today={...(health.today||{date:nutrition.date}),...nutrition};
+    }catch(e){}
+    return health;
   }
 
   async function taskSheetValues(token){
@@ -554,7 +572,8 @@
   async function dispatch(cfg,token,method,args){
     if(method==='getBootstrapData'){
       const boot=await execute(cfg,token,method,args);
-      try{boot.health=await getHealthSummaryDirect(token)}catch(e){}
+      const nutritionSetting=(boot.settings||[]).find(x=>x.setting==='Nutrition Sheet ID');
+      try{boot.health=await getHealthSummaryDirect(token,nutritionSetting&&nutritionSetting.value)}catch(e){}
       return boot;
     }
     if(method==='getTaskDashboardData')return getTaskDashboardDataDirect(token);
