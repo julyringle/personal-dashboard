@@ -714,6 +714,61 @@ function toggleTask(taskId) {
   throw new Error('Task not found.');
 }
 
+
+function updateTask(taskId, payload) {
+  taskId = String(taskId || '');
+  payload = payload || {};
+  if (!taskId) throw new Error('Task identity missing.');
+  const sh = dashboardSpreadsheet_().getSheetByName('Tasks');
+  const values = sh.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const idx = {};
+  headers.forEach(function(h, i) { idx[h] = i; });
+
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][idx['ID']] || '') !== taskId) continue;
+    const row = i + 1;
+    const done = payload.done === undefined ? truthySheet_(values[i][idx['Done']]) : truthySheet_(payload.done);
+    const set = function(name, value) {
+      if (idx[name] === undefined) return;
+      sh.getRange(row, idx[name] + 1).setValue(value === undefined || value === null ? '' : value);
+    };
+
+    if (payload.title !== undefined) set('Task', String(payload.title || '').trim());
+    if (payload.priority !== undefined) set('Priority', payload.priority);
+    if (payload.area !== undefined) set('Area', payload.area);
+    if (payload.due !== undefined) set('Due', payload.due);
+    if (payload.details !== undefined) set('Details', payload.details);
+    if (payload.course !== undefined) set('Course', payload.course);
+    if (payload.repeat !== undefined) set('Repeat', payload.repeat);
+    if (payload.repeatUntil !== undefined) set('Repeat Until', payload.repeatUntil);
+
+    set('Done', done);
+    set('Status', done ? 'Done' : 'To Do');
+    set('Completed At', done ? (values[i][idx['Completed At']] || new Date()) : '');
+    return { ok: true, id: taskId, done: done };
+  }
+  throw new Error('Task not found.');
+}
+
+function deleteTask(taskId) {
+  taskId = String(taskId || '');
+  if (!taskId) throw new Error('Task identity missing.');
+  const sh = dashboardSpreadsheet_().getSheetByName('Tasks');
+  const values = sh.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const idx = {};
+  headers.forEach(function(h, i) { idx[h] = i; });
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][idx['ID']] || '') !== taskId) continue;
+    sh.getRange(i + 1, idx['Status'] + 1).setValue('Archived');
+    sh.getRange(i + 1, idx['Done'] + 1).setValue(true);
+    sh.getRange(i + 1, idx['Completed At'] + 1).setValue(new Date());
+    return { ok: true, id: taskId, deleted: true };
+  }
+  throw new Error('Task not found.');
+}
+
 function projectFromSheet_(r) {
   return {
     id: String(r['ID'] || ''),
