@@ -159,6 +159,56 @@
     if(!response.ok)throw new Error((data.error&&data.error.message)||('Google Sheets API error '+response.status));
     return data;
   }
+  async function healthSheetValues(token){
+    const data=await sheetsApi(token,'values/'+encodeURIComponent('Health!A:R'));
+    return data.values||[];
+  }
+  function healthSummaryFromValues(values){
+    if(!values.length)return null;
+    const h=taskHeaderMap(values);
+    const num=v=>{if(v===undefined||v===null||String(v).trim()==='')return null;const n=Number(v);return Number.isFinite(n)?n:null};
+    const rows=values.slice(1).filter(row=>{
+      const type=String(row[h['Type']]||'');
+      return !type||type==='Daily Check-In';
+    }).map(row=>({
+      date:normalizeDateKey(row[h['Date']]),
+      weight:num(row[h['Morning Weight (lb)']]),
+      sleepHours:num(row[h['Sleep Hours']]),
+      sleepScore:num(row[h['Sleep Score']]),
+      hrv:num(row[h['HRV']]),
+      restingHR:num(row[h['Resting HR']]),
+      steps:num(row[h['Steps']]),
+      protein:num(row[h['Protein (g)']]),
+      bodyBattery:num(row[h['Body Battery']]),
+      energy:num(row[h['Energy']]),
+      stress:num(row[h['Stress']]),
+      soreness:num(row[h['Soreness']]),
+      mood:String(row[h['Mood']]||''),
+      calories:num(row[h['Calories']]),
+      carbs:num(row[h['Carbs (g)']]),
+      fat:num(row[h['Fat (g)']])
+    })).filter(x=>x.date).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+    if(!rows.length)return null;
+    const todayKey=dateKeyCentral(new Date());
+    const today=rows.find(x=>x.date===todayKey)||{
+      date:todayKey,weight:null,sleepHours:null,sleepScore:null,hrv:null,restingHR:null,steps:null,
+      protein:null,bodyBattery:null,energy:null,stress:null,soreness:null,mood:'',calories:null,carbs:null,fat:null
+    };
+    const hasRecovery=x=>[x.weight,x.sleepHours,x.sleepScore,x.hrv,x.restingHR,x.steps,x.bodyBattery].some(v=>v!==null);
+    const latest=rows.find(hasRecovery)||rows[0];
+    const weights=rows.filter(x=>x.weight!==null);
+    const latestWeight=weights[0]||null,oldestWeight=weights.length?weights[weights.length-1]:null;
+    return {
+      latest,
+      today,
+      weightTrend30d:latestWeight&&oldestWeight?Math.round((latestWeight.weight-oldestWeight.weight)*10)/10:null,
+      series:rows.slice().reverse()
+    };
+  }
+  async function getHealthSummaryDirect(token){
+    return healthSummaryFromValues(await healthSheetValues(token));
+  }
+
   async function taskSheetValues(token){
     const data=await sheetsApi(token,'values/'+encodeURIComponent('Tasks!A:M'));
     return data.values||[];
@@ -502,7 +552,11 @@
       (method==='createQuickItem'&&args&&['task','school_task'].includes(String(args[0]||'').toLowerCase()));
   }
   async function dispatch(cfg,token,method,args){
-    if(method==='getBootstrapData')return execute(cfg,token,method,args);
+    if(method==='getBootstrapData'){
+      const boot=await execute(cfg,token,method,args);
+      try{boot.health=await getHealthSummaryDirect(token)}catch(e){}
+      return boot;
+    }
     if(method==='getTaskDashboardData')return getTaskDashboardDataDirect(token);
     if(method==='toggleTask')return toggleTaskDirect(token,args&&args[0]);
     if(method==='updateTask')return updateTaskDirect(token,args&&args[0],args&&args[1]);
