@@ -222,7 +222,18 @@
     if(!health)return health;
     try{
       const nutrition=await getNutritionTodayDirect(token,sourceId);
-      if(nutrition)health.today={...(health.today||{date:nutrition.date}),...nutrition};
+      if(nutrition){
+        health.today={...(health.today||{date:nutrition.date}),...nutrition};
+        const blank={date:nutrition.date,weight:null,sleepHours:null,sleepScore:null,hrv:null,restingHR:null,steps:null,protein:null,bodyBattery:null,energy:null,stress:null,soreness:null,mood:'',calories:null,carbs:null,fat:null};
+        let found=false;
+        health.series=(health.series||[]).map(row=>{
+          if(row.date!==nutrition.date)return row;
+          found=true;
+          return {...row,...nutrition};
+        });
+        if(!found)health.series.push({...blank,...nutrition});
+        health.series.sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+      }
     }catch(e){}
     return health;
   }
