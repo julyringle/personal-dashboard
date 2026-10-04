@@ -28,7 +28,7 @@ function doGet(e) {
   }
 
   const requestedView = e && e.parameter ? String(e.parameter.view || '').toLowerCase() : '';
-  const initialView = ['home', 'habits', 'health', 'school', 'projects', 'collections'].indexOf(requestedView) >= 0 ? requestedView : 'home';
+  const initialView = ['home', 'tasks', 'habits', 'health', 'school', 'projects', 'collections'].indexOf(requestedView) >= 0 ? requestedView : 'home';
   html = html.replace('__INITIAL_VIEW__', initialView);
 
   return HtmlService.createHtmlOutput(html)
@@ -106,6 +106,7 @@ function getBootstrapData() {
   };
 
   const errors = [];
+  try { rollRecurringTasks_(); } catch (e) { errors.push('recurring tasks: ' + e.message); }
   try { out.settings = getDashboardSettings_(); } catch (e) { errors.push('settings: ' + e.message); }
   try { out.calendar = getCalendarWeek(0); } catch (e) { errors.push('calendar: ' + e.message); }
   try { out.focus = getFocusTasks_(); } catch (e) { errors.push('focus: ' + e.message); }
@@ -442,7 +443,7 @@ function unique_(arr) {
 
 const DASHBOARD_TABLES = Object.freeze({
   Settings: ['Setting','Group','Value','Number','Enabled','Order','Accent','Japanese','Notes'],
-  Tasks: ['ID','Task','Status','Priority','Area','Due','Done','Details','Course','Source URL'],
+  Tasks: ['ID','Task','Status','Priority','Area','Due','Done','Details','Course','Source URL','Repeat','Repeat Until','Completed At'],
   Projects: ['ID','Name','Status','Phase','Priority','Progress','Target Date','Summary','Area','Budget','Source URL'],
   Health: ['ID','Date','Type','Morning Weight (lb)','Sleep Hours','Sleep Score','HRV','Resting HR','Steps','Protein (g)','Body Battery','Energy','Stress','Soreness','Mood'],
   Habits: ['Card ID','Habit ID','Name','Color','Order','Active'],
@@ -565,7 +566,10 @@ function taskFromSheet_(r) {
     due: r['Due'] ? dateKeySheet_(r['Due']) : null,
     done: truthySheet_(r['Done']),
     details: String(r['Details'] || ''),
-    course: String(r['Course'] || '')
+    course: String(r['Course'] || ''),
+    repeat: String(r['Repeat'] || ''),
+    repeatUntil: r['Repeat Until'] ? dateKeySheet_(r['Repeat Until']) : null,
+    completedAt: r['Completed At'] ? new Date(r['Completed At']).toISOString() : null
   };
 }
 
@@ -608,6 +612,105 @@ function getProjectTasksSheet_() {
   return openTaskRowsSheet_().filter(function(t) { return t.area === 'Projects'; }).sort(function(a,b) {
     return String(a.due || '9999').localeCompare(String(b.due || '9999'));
   }).slice(0,50);
+}
+
+function advanceRepeatDate_(dateKey, repeat) {
+  const parts = String(dateKey || '').split('-').map(Number);
+  if (parts.length !== 3 || parts.some(function(x){ return !x; })) return '';
+  const d = new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0, 0);
+  const kind = String(repeat || '').toLowerCase();
+  if (kind === 'daily') d.setDate(d.getDate() + 1);
+  else if (kind === 'weekly') d.setDate(d.getDate() + 7);
+  else if (kind === 'monthly') d.setMonth(d.getMonth() + 1);
+  else if (kind === 'yearly') d.setFullYear(d.getFullYear() + 1);
+  else return '';
+  return Utilities.formatDate(d, APP.TZ, 'yyyy-MM-dd');
+}
+
+function rollRecurringTasks_() {
+  const sh = dashboardSpreadsheet_().getSheetByName('Tasks');
+  if (!sh || sh.getLastRow() < 2) return;
+  const range = sh.getDataRange();
+  const values = range.getValues();
+  const headers = values[0].map(String);
+  const idx = {};
+  headers.forEach(function(h, i) { idx[h] = i; });
+  const today = Utilities.formatDate(new Date(), APP.TZ, 'yyyy-MM-dd');
+  const updates = [];
+
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const repeat = String(row[idx['Repeat']] || '');
+    const due = row[idx['Due']] ? dateKeySheet_(row[idx['Due']]) : '';
+    const done = truthySheet_(row[idx['Done']]);
+    if (!repeat || !due || !done || due >= today) continue;
+
+    let next = due;
+    do {
+      next = advanceRepeatDate_(next, repeat);
+    } while (next && next < today);
+
+    const until = row[idx['Repeat Until']] ? dateKeySheet_(row[idx['Repeat Until']]) : '';
+    if (!next || (until && next > until)) {
+      row[idx['Status']] = 'Archived';
+      updates.push({ row: i + 1, status: 'Archived', due: due, done: true, completedAt: row[idx['Completed At']] || '' });
+      continue;
+    }
+
+    row[idx['Status']] = 'To Do';
+    row[idx['Due']] = next;
+    row[idx['Done']] = false;
+    row[idx['Completed At']] = '';
+    updates.push({ row: i + 1, status: 'To Do', due: next, done: false, completedAt: '' });
+  }
+
+  updates.forEach(function(u) {
+    sh.getRange(u.row, idx['Status'] + 1).setValue(u.status);
+    sh.getRange(u.row, idx['Due'] + 1).setValue(u.due);
+    sh.getRange(u.row, idx['Done'] + 1).setValue(u.done);
+    sh.getRange(u.row, idx['Completed At'] + 1).setValue(u.completedAt);
+  });
+}
+
+function getTaskDashboardData() {
+  rollRecurringTasks_();
+  const all = sheetObjects_('Tasks').map(taskFromSheet_).filter(function(t) {
+    return t.title && t.status !== 'Archived';
+  });
+  const open = all.filter(function(t) { return !t.done && t.status !== 'Done'; }).sort(function(a, b) {
+    const ad = a.due || '9999-12-31', bd = b.due || '9999-12-31';
+    if (ad !== bd) return ad.localeCompare(bd);
+    const rank = {High:0, Medium:1, Low:2};
+    return (rank[a.priority] ?? 9) - (rank[b.priority] ?? 9);
+  });
+  const completed = all.filter(function(t) { return t.done || t.status === 'Done'; }).sort(function(a, b) {
+    return String(b.completedAt || b.due || '').localeCompare(String(a.completedAt || a.due || ''));
+  }).slice(0, 40);
+  return {
+    today: Utilities.formatDate(new Date(), APP.TZ, 'yyyy-MM-dd'),
+    open: open,
+    completed: completed
+  };
+}
+
+function toggleTask(taskId) {
+  taskId = String(taskId || '');
+  if (!taskId) throw new Error('Task identity missing.');
+  const sh = dashboardSpreadsheet_().getSheetByName('Tasks');
+  const values = sh.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const idx = {};
+  headers.forEach(function(h, i) { idx[h] = i; });
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][idx['ID']] || '') !== taskId) continue;
+    const wasDone = truthySheet_(values[i][idx['Done']]);
+    const nowDone = !wasDone;
+    sh.getRange(i + 1, idx['Done'] + 1).setValue(nowDone);
+    sh.getRange(i + 1, idx['Status'] + 1).setValue(nowDone ? 'Done' : 'To Do');
+    sh.getRange(i + 1, idx['Completed At'] + 1).setValue(nowDone ? new Date() : '');
+    return { ok: true, id: taskId, done: nowDone };
+  }
+  throw new Error('Task not found.');
 }
 
 function projectFromSheet_(r) {
@@ -787,9 +890,10 @@ function createQuickItemSheet_(type, payload) {
   if (type === 'task' || type === 'school_task') {
     const title=String(payload.title||'').trim(); if(!title)throw new Error('Task title is required.');
     appendTableObject_('Tasks',{
-      'ID':Utilities.getUuid(),'Task':title,'Status':'Inbox','Priority':payload.priority||'',
+      'ID':Utilities.getUuid(),'Task':title,'Status':'To Do','Priority':payload.priority||'',
       'Area':type==='school_task'?'School':(payload.area||'Personal'),'Due':payload.due||'',
-      'Done':false,'Details':payload.details||'','Course':payload.course||'','Source URL':''
+      'Done':false,'Details':payload.details||'','Course':payload.course||'','Source URL':'',
+      'Repeat':payload.repeat||'','Repeat Until':payload.repeatUntil||'','Completed At':''
     });
     return {ok:true};
   }
