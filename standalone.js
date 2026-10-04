@@ -182,8 +182,8 @@
     const values=await taskSheetValues(token);if(values.length<2)return;
     const h=taskHeaderMap(values),today=dateKeyCentral(new Date()),updates=[];
     for(let i=1;i<values.length;i++){
-      const row=values[i],repeat=String(row[h['Repeat']]||''),due=normalizeDateKey(row[h['Due']]),done=boolish(row[h['Done']]);
-      if(!repeat||!due||!done||due>=today)continue;
+      const row=values[i],repeat=String(row[h['Repeat']]||''),due=normalizeDateKey(row[h['Due']]),done=boolish(row[h['Done']]),completedDay=normalizeDateKey(row[h['Completed At']]);
+      if(!repeat||!due||!done||due>=today||(completedDay&&completedDay>=today))continue;
       let next=due;
       do{next=advanceRepeatDate(next,repeat)}while(next&&next<today);
       const until=normalizeDateKey(row[h['Repeat Until']]);
@@ -228,7 +228,7 @@
   async function createTaskDirect(token,type,payload){
     payload=payload||{};const title=String(payload.title||'').trim();if(!title)throw new Error('Task title is required.');
     const row=[
-      (crypto&&crypto.randomUUID)?crypto.randomUUID():(Date.now()+'-'+Math.random().toString(16).slice(2)),
+      (typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():(Date.now()+'-'+Math.random().toString(16).slice(2)),
       title,'To Do',payload.priority||'',type==='school_task'?'School':(payload.area||'Personal'),payload.due||'',false,
       payload.details||'',payload.course||'','',payload.repeat||'',payload.repeatUntil||'',''
     ];
