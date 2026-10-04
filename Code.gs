@@ -445,7 +445,7 @@ const DASHBOARD_TABLES = Object.freeze({
   Settings: ['Setting','Group','Value','Number','Enabled','Order','Accent','Japanese','Notes'],
   Tasks: ['ID','Task','Status','Priority','Area','Due','Done','Details','Course','Source URL','Repeat','Repeat Until','Completed At'],
   Projects: ['ID','Name','Status','Phase','Priority','Progress','Target Date','Summary','Area','Budget','Source URL'],
-  Health: ['ID','Date','Type','Morning Weight (lb)','Sleep Hours','Sleep Score','HRV','Resting HR','Steps','Protein (g)','Body Battery','Energy','Stress','Soreness','Mood'],
+  Health: ['ID','Date','Type','Morning Weight (lb)','Sleep Hours','Sleep Score','HRV','Resting HR','Steps','Protein (g)','Body Battery','Energy','Stress','Soreness','Mood','Calories','Carbs (g)','Fat (g)'],
   Habits: ['Card ID','Habit ID','Name','Color','Order','Active'],
   HabitHistory: ['ID','Date','Habit Card ID','Habit ID','Habit Name'],
   Notes: ['ID','Title','Area','Status','Type','Date','Body','Source URL']
@@ -801,6 +801,9 @@ function healthFromSheet_(r) {
     restingHR: numOrNull_(r['Resting HR']),
     steps: numOrNull_(r['Steps']),
     protein: numOrNull_(r['Protein (g)']),
+    calories: numOrNull_(r['Calories']),
+    carbs: numOrNull_(r['Carbs (g)']),
+    fat: numOrNull_(r['Fat (g)']),
     bodyBattery: numOrNull_(r['Body Battery']),
     energy: numOrNull_(r['Energy']),
     stress: numOrNull_(r['Stress']),
@@ -816,11 +819,20 @@ function getHealthSummarySheet_() {
     return String(b.date).localeCompare(String(a.date));
   });
   if (!data.length) return null;
-  const latest = data[0];
+  const todayKey = Utilities.formatDate(new Date(), APP.TZ, 'yyyy-MM-dd');
+  const today = data.find(function(x) { return x.date === todayKey; }) || {
+    date: todayKey, weight: null, sleepHours: null, sleepScore: null, hrv: null, restingHR: null,
+    steps: null, protein: null, calories: null, carbs: null, fat: null, bodyBattery: null,
+    energy: null, stress: null, soreness: null, mood: ''
+  };
+  const latest = data.find(function(x) {
+    return [x.weight,x.sleepHours,x.sleepScore,x.hrv,x.restingHR,x.steps,x.bodyBattery].some(function(v){ return v !== null; });
+  }) || data[0];
   const oldestWeight = data.slice().reverse().find(function(x) { return x.weight !== null; });
   const latestWeight = data.find(function(x) { return x.weight !== null; });
   return {
     latest: latest,
+    today: today,
     weightTrend30d: latestWeight && oldestWeight ? round1_(latestWeight.weight - oldestWeight.weight) : null,
     series: data.slice().reverse()
   };
