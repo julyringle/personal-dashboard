@@ -643,7 +643,8 @@ function rollRecurringTasks_() {
     const repeat = String(row[idx['Repeat']] || '');
     const due = row[idx['Due']] ? dateKeySheet_(row[idx['Due']]) : '';
     const done = truthySheet_(row[idx['Done']]);
-    if (!repeat || !due || !done || due >= today) continue;
+    const completedDay = row[idx['Completed At']] ? dateKeySheet_(row[idx['Completed At']]) : '';
+    if (!repeat || !due || !done || due >= today || (completedDay && completedDay >= today)) continue;
 
     let next = due;
     do {
