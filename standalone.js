@@ -533,6 +533,10 @@
       await flushQueue(cfg,token);
       const result=await dispatch(cfg,token,method,args);
       if(CACHEABLE.has(method))await writeCached(method,args,result);
+      if(method==='getBootstrapData'){
+        getTaskDashboardDataDirect(token).then(v=>writeCached('getTaskDashboardData',[],v)).catch(()=>{});
+        execute(cfg,token,'getHabitDashboardData',[]).then(v=>writeCached('getHabitDashboardData',[],v)).catch(()=>{});
+      }
       setLastSync();emitState({fromCache:false,needsAuth:false});
       return result;
     }catch(err){
@@ -543,6 +547,10 @@
         await flushQueue(cfg,token);
         const result=await dispatch(cfg,token,method,args);
         if(CACHEABLE.has(method))await writeCached(method,args,result);
+        if(method==='getBootstrapData'){
+          getTaskDashboardDataDirect(token).then(v=>writeCached('getTaskDashboardData',[],v)).catch(()=>{});
+          execute(cfg,token,'getHabitDashboardData',[]).then(v=>writeCached('getHabitDashboardData',[],v)).catch(()=>{});
+        }
         setLastSync();emitState({fromCache:false,needsAuth:false});
         return result;
       }
@@ -564,6 +572,7 @@
     await writeCached('getBootstrapData',[],boot);
     const tasks=await dispatch(cfg,token,'getTaskDashboardData',[]);
     await writeCached('getTaskDashboardData',[],tasks);
+    try{const habits=await dispatch(cfg,token,'getHabitDashboardData',[]);await writeCached('getHabitDashboardData',[],habits)}catch(e){}
     setLastSync();emitState({fromCache:false,needsAuth:false});
     location.reload();
     return true;
