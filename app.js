@@ -2,7 +2,8 @@ const STATE = {
   route:(window.__INITIAL_VIEW__||'home'), bootstrap:null, weekOffset:0,
   collectionTab:(localStorage.getItem('dashboardCollectionTab')||'wishlist'), collectionCache:{},
   pokemonGen:'1', pokemonFilter:'all', wishlistCategory:'all', onePiecePage:'all',
-  modalType:null, editingTaskId:null, habitDashboard:null, taskDashboard:null, taskFilter:'all'
+  modalType:null, editingTaskId:null, habitDashboard:null, taskDashboard:null, taskFilter:'all',
+  bootstrapFetchedAt:0, healthRefreshPromise:null
 };
 const GEN_COLORS={1:'#8E3E42',2:'#A8642A',3:'#A88D3E',4:'#4E725C',5:'#536979',6:'#6E547A',7:'#8A526C',8:'#79634F',9:'#73777C'};
 const RAFT_CONFIG={
@@ -78,12 +79,24 @@ function setPageChrome(route){
 function navigate(route){
   STATE.route=route;document.body.classList.add('route-changing');document.body.dataset.page=route;setPageChrome(route);
   document.querySelectorAll('[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===route));
-  if(route==='tasks')renderTasksPage();else if(route==='habits')renderHabitsPage();else if(route==='health')renderHealthPage();else if(route==='school')renderSchoolPage();else if(route==='projects')renderProjectsPage();else if(route==='collections')renderCollections();else renderHome();
+  if(route==='tasks')renderTasksPage();else if(route==='habits')renderHabitsPage();else if(route==='health'){renderHealthPage();if(Date.now()-Number(STATE.bootstrapFetchedAt||0)>5000)refreshHealthLive();}else if(route==='school')renderSchoolPage();else if(route==='projects')renderProjectsPage();else if(route==='collections')renderCollections();else renderHome();
   requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.remove('route-changing')));
+}
+async function refreshHealthLive(){
+  if(STATE.healthRefreshPromise)return STATE.healthRefreshPromise;
+  STATE.healthRefreshPromise=(async()=>{
+    try{
+      const boot=await server('getBootstrapData');
+      STATE.bootstrap=boot;STATE.bootstrapFetchedAt=Date.now();
+      if(STATE.route==='health')renderHealthPage();
+    }catch(e){console.warn('Health refresh failed',e)}
+    finally{STATE.healthRefreshPromise=null}
+  })();
+  return STATE.healthRefreshPromise;
 }
 
 async function init(){
-  try{STATE.bootstrap=await server('getBootstrapData');applyTheme();updateClock();navigate(STATE.route);if(STATE.bootstrap.errors?.length)console.warn(STATE.bootstrap.errors)}catch(e){document.getElementById('app').innerHTML=`<div class="error">${esc(e.message)}</div>`}
+  try{STATE.bootstrap=await server('getBootstrapData');STATE.bootstrapFetchedAt=Date.now();applyTheme();updateClock();navigate(STATE.route);if(STATE.bootstrap.errors?.length)console.warn(STATE.bootstrap.errors)}catch(e){document.getElementById('app').innerHTML=`<div class="error">${esc(e.message)}</div>`}
 }
 
 function panel(title,jp,body,opts={}){return `<section class="panel ${opts.className||''}"><div class="panel-head"><div class="panel-title">${esc(title)} <span class="jp">${esc(jp||'')}</span></div>${opts.right||''}</div>${body}</section>`}
@@ -128,7 +141,7 @@ function taskRow(t,i){
 }
 function healthPanel(h){
   if(!h||!h.latest)return panel('HEALTH','健康','<div class="empty">NO RECENT CHECK-IN</div>',{right:'<button class="panel-link" data-open-route="health">OPEN →</button>'});
-  const x=h.latest,proteinGoal=settingNum('Protein Goal',160);const metrics=[['WEIGHT',x.weight!=null?x.weight+' LB':'—',h.weightTrend30d!=null?(h.weightTrend30d>0?'+':'')+h.weightTrend30d+' / 30D':''],['SLEEP',x.sleepHours!=null?x.sleepHours+' H':'—',x.sleepScore!=null?'SCORE '+x.sleepScore:''],['HRV',x.hrv??'—',''],['REST HR',x.restingHR??'—','BPM'],['STEPS',x.steps!=null?Number(x.steps).toLocaleString():'—',''],['PROTEIN',x.protein!=null?Math.round(Number(x.protein))+' / '+proteinGoal+' G':'— / '+proteinGoal+' G','']];
+  const x=h.latest,t=h.today||{},proteinGoal=settingNum('Protein Goal',160);const metrics=[['WEIGHT',x.weight!=null?x.weight+' LB':'—',h.weightTrend30d!=null?(h.weightTrend30d>0?'+':'')+h.weightTrend30d+' / 30D':''],['SLEEP',x.sleepHours!=null?x.sleepHours+' H':'—',x.sleepScore!=null?'SCORE '+x.sleepScore:''],['HRV',x.hrv??'—',''],['REST HR',x.restingHR??'—','BPM'],['STEPS',x.steps!=null?Number(x.steps).toLocaleString():'—',''],['PROTEIN',t.protein!=null?Math.round(Number(t.protein))+' / '+proteinGoal+' G':'— / '+proteinGoal+' G','TODAY']];
   return panel('HEALTH','健康',`<div class="panel-body"><div class="metric-grid">${metrics.map(m=>`<div class="metric"><div class="metric-k">${m[0]}</div><div class="metric-v">${esc(m[1])}</div><div class="metric-d">${esc(m[2])}</div></div>`).join('')}</div></div>`,{right:'<button class="panel-link" data-open-route="health">OPEN →</button>'});
 }
 function schoolPanel(tasks){
