@@ -2,7 +2,7 @@ const STATE = {
   route:(window.__INITIAL_VIEW__||'home'), bootstrap:null, weekOffset:0,
   collectionTab:(localStorage.getItem('dashboardCollectionTab')||'wishlist'), collectionCache:{},
   pokemonGen:'1', pokemonFilter:'all', wishlistCategory:'all', onePiecePage:'all',
-  modalType:null, habitDashboard:null
+  modalType:null, habitDashboard:null, taskDashboard:null, taskFilter:'all'
 };
 const GEN_COLORS={1:'#8E3E42',2:'#A8642A',3:'#A88D3E',4:'#4E725C',5:'#536979',6:'#6E547A',7:'#8A526C',8:'#79634F',9:'#73777C'};
 const RAFT_CONFIG={
@@ -57,7 +57,7 @@ setInterval(updateClock,30000);updateClock();
 
 document.querySelectorAll('[data-route]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.route)));
 function setPageChrome(route){
-  const names={home:['HOME','ホーム'],habits:['HABITS','習慣'],health:['HEALTH','健康'],school:['SCHOOL','学業'],projects:['PROJECTS','計画'],collections:['COLLECTIONS','収集']};
+  const names={home:['HOME','ホーム'],tasks:['TASKS','任務'],habits:['HABITS','習慣'],health:['HEALTH','健康'],school:['SCHOOL','学業'],projects:['PROJECTS','計画'],collections:['COLLECTIONS','収集']};
   const pair=names[route]||names.home;
   const main=document.querySelector('.brand-main'),jp=document.querySelector('.brand .jp');
   if(main)main.textContent=pair[0];if(jp)jp.textContent=pair[1];document.title=pair[0];
@@ -65,7 +65,7 @@ function setPageChrome(route){
 function navigate(route){
   STATE.route=route;document.body.classList.add('route-changing');document.body.dataset.page=route;setPageChrome(route);
   document.querySelectorAll('[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===route));
-  if(route==='habits')renderHabitsPage();else if(route==='health')renderHealthPage();else if(route==='school')renderSchoolPage();else if(route==='projects')renderProjectsPage();else if(route==='collections')renderCollections();else renderHome();
+  if(route==='tasks')renderTasksPage();else if(route==='habits')renderHabitsPage();else if(route==='health')renderHealthPage();else if(route==='school')renderSchoolPage();else if(route==='projects')renderProjectsPage();else if(route==='collections')renderCollections();else renderHome();
   requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.remove('route-changing')));
 }
 
@@ -92,6 +92,7 @@ function bindHome(){
   document.querySelectorAll('[data-habit]').forEach(x=>x.onclick=()=>toggleHabitUI(x.dataset.habit));
   document.querySelectorAll('[data-week]').forEach(x=>x.onclick=()=>changeWeek(Number(x.dataset.week)));
   document.querySelectorAll('[data-open-route]').forEach(x=>x.onclick=()=>navigate(x.dataset.openRoute));
+  bindTaskToggles();
 }
 
 function quickPanel(){return panel('QUICK CAPTURE','即時入力',`<div class="panel-body"><div class="quick-row">
@@ -106,7 +107,12 @@ function habitsPanel(habits){
 }
 async function toggleHabitUI(index){const h=STATE.bootstrap.habits[Number(index)];if(!h)return;try{const res=await server('toggleHabit',{cardId:h.cardId,habitId:h.habitId,logId:h.logId});h.done=res.done;h.logId=res.logId;STATE.habitDashboard=null;renderHome()}catch(e){alert(e.message)}}
 function focusPanel(tasks){const n=settingNum('Focus Count',5);const show=tasks.slice(0,n);const body=show.length?`<div class="panel-body task-list">${show.map((t,i)=>taskRow(t,i)).join('')}</div>`:`<div class="empty">FOCUS QUEUE CLEAR</div>`;return panel('FOCUS','優先',body,{right:`<div class="panel-sub">${show.length} ACTIVE</div>`})}
-function taskRow(t,i){const due=t.due?new Date(t.due):null,overdue=due&&due<startDay(new Date());const inner=`<div class="task-num">${String(i+1).padStart(2,'0')}</div><div><div class="task-title">${esc(t.title)}</div><div class="task-meta"><span class="priority-${String(t.priority||'').toLowerCase()}">${esc(t.priority||'')}</span>${t.area?' · '+esc(t.area):''}${t.course?' · '+esc(t.course):''}</div></div><div class="due ${overdue?'overdue':''}">${t.due?fmtDate(t.due,{month:'short',day:'2-digit'}).toUpperCase():'—'}</div>`;return t.url?`<a class="task-row" href="${attr(t.url)}">${inner}</a>`:`<div class="task-row">${inner}</div>`}
+function taskRow(t,i){
+  const due=t.due?new Date(t.due+'T12:00:00'):null,overdue=due&&due<startDay(new Date())&&!t.done;
+  const repeat=t.repeat?` · ↻ ${esc(String(t.repeat).toUpperCase())}`:'';
+  const meta=`${t.priority?`<span class="priority-${String(t.priority||'').toLowerCase()}">${esc(t.priority)}</span>`:''}${t.area?' · '+esc(t.area):''}${t.course?' · '+esc(t.course):''}${repeat}`;
+  return `<div class="task-row ${t.done?'task-done':''}" data-task-row="${attr(t.id)}"><button class="task-check ${t.done?'on':''}" data-task-id="${attr(t.id)}" data-task-title="${attr(t.title)}" aria-label="${t.done?'Mark not done':'Mark done'}">${t.done?'✓':''}</button><div><div class="task-title">${esc(t.title)}</div><div class="task-meta">${meta}</div></div><div class="due ${overdue?'overdue':''}">${t.due?fmtDate(t.due+'T12:00:00',{month:'short',day:'2-digit'}).toUpperCase():'—'}</div></div>`;
+}
 function healthPanel(h){
   if(!h||!h.latest)return panel('HEALTH','健康','<div class="empty">NO RECENT CHECK-IN</div>',{right:'<button class="panel-link" data-open-route="health">OPEN →</button>'});
   const x=h.latest;const metrics=[['WEIGHT',x.weight!=null?x.weight+' LB':'—',h.weightTrend30d!=null?(h.weightTrend30d>0?'+':'')+h.weightTrend30d+' / 30D':''],['SLEEP',x.sleepHours!=null?x.sleepHours+' H':'—',x.sleepScore!=null?'SCORE '+x.sleepScore:''],['HRV',x.hrv??'—',''],['REST HR',x.restingHR??'—','BPM'],['STEPS',x.steps!=null?Number(x.steps).toLocaleString():'—',''],['PROTEIN',x.protein!=null?x.protein+' G':'—','']];
@@ -127,6 +133,62 @@ function collectionLaunchPanel(){return panel('COLLECTIONS','収集',`<div class
   <button class="launch-card" data-open-route="collections" onclick="setCollectionTab('pokemon')"><div class="launch-title">POKÉMON</div><div class="launch-jp">世代</div><div class="launch-note">GEN I–IX</div></button>
   <button class="launch-card" data-open-route="collections" onclick="setCollectionTab('onepiece')"><div class="launch-title">ONE PIECE</div><div class="launch-jp">ページ</div><div class="launch-note">BINDER PAGES</div></button>
 </div></div>`)}
+
+
+function bindTaskToggles(){
+  document.querySelectorAll('.task-check[data-task-id]').forEach(btn=>{
+    btn.onclick=async e=>{
+      e.preventDefault();e.stopPropagation();
+      const id=btn.dataset.taskId,title=btn.dataset.taskTitle||'Task';
+      btn.disabled=true;
+      try{
+        const res=await server('toggleTask',id);
+        if(res.done)showTaskUndo(id,title);
+        STATE.bootstrap=await server('getBootstrapData');
+        STATE.taskDashboard=null;
+        if(STATE.route==='tasks')await renderTasksPage();else navigate(STATE.route);
+      }catch(err){alert(err.message)}finally{btn.disabled=false}
+    };
+  });
+}
+
+function showTaskUndo(id,title){
+  let toast=document.getElementById('taskUndoToast');
+  if(!toast){toast=document.createElement('div');toast.id='taskUndoToast';toast.className='task-toast';document.body.appendChild(toast)}
+  toast.innerHTML=`<span>DONE // ${esc(title)}</span><button type="button">UNDO</button>`;
+  toast.classList.add('show');
+  const b=toast.querySelector('button');
+  b.onclick=async()=>{try{await server('toggleTask',id);STATE.bootstrap=await server('getBootstrapData');STATE.taskDashboard=null;if(STATE.route==='tasks')await renderTasksPage();else navigate(STATE.route)}catch(err){alert(err.message)}toast.classList.remove('show')};
+  clearTimeout(window.__taskToastTimer);
+  window.__taskToastTimer=setTimeout(()=>toast.classList.remove('show'),7000);
+}
+
+async function renderTasksPage(){
+  const root=document.getElementById('app');
+  root.innerHTML='<div class="loading">LOADING TASKS // 任務読込</div>';
+  try{
+    if(!STATE.taskDashboard)STATE.taskDashboard=await server('getTaskDashboardData');
+    renderTaskDashboard(STATE.taskDashboard);
+  }catch(e){root.innerHTML=`<div class="error">${esc(e.message)}</div>`}
+}
+
+function renderTaskDashboard(data){
+  const root=document.getElementById('app'),allOpen=data.open||[],allDone=data.completed||[],today=data.today;
+  const areas=['all',...Array.from(new Set([...allOpen,...allDone].map(x=>x.area).filter(Boolean))).sort()];
+  const keep=x=>STATE.taskFilter==='all'||x.area===STATE.taskFilter;
+  const open=allOpen.filter(keep),done=allDone.filter(keep);
+  const todayRows=open.filter(t=>t.due&&t.due<=today);
+  const upcoming=open.filter(t=>t.due&&t.due>today);
+  const anytime=open.filter(t=>!t.due);
+  const section=(title,jp,rows,empty)=>`<section class="panel task-section"><div class="panel-head"><div class="panel-title">${title} <span class="jp">${jp}</span></div><div class="panel-sub">${rows.length}</div></div>${rows.length?`<div class="panel-body task-list">${rows.map((t,i)=>taskRow(t,i)).join('')}</div>`:`<div class="empty">${empty}</div>`}</section>`;
+  root.innerHTML=`<div class="page-head tasks-head"><div><div class="page-title">TASKS // 任務</div><div class="panel-sub">FLEXIBLE WORK LIVES HERE · CALENDAR STAYS FOR FIXED TIMES</div></div><div class="task-head-actions"><button class="ghost-btn" type="button" onclick="openQuick('task')">＋ NEW TASK</button>${dashboardDataSourceButton()}</div></div>
+  <div class="task-stats"><div class="detail-stat"><span>DUE / OVERDUE</span><b>${todayRows.length}</b><em>NOW</em></div><div class="detail-stat"><span>UPCOMING</span><b>${upcoming.length}</b><em>DATED</em></div><div class="detail-stat"><span>ANYTIME</span><b>${anytime.length}</b><em>NO DATE</em></div><div class="detail-stat"><span>COMPLETED</span><b>${done.length}</b><em>RECENT</em></div></div>
+  <div class="task-filters">${areas.map(a=>`<button class="chip ${STATE.taskFilter===a?'active':''}" data-task-filter="${attr(a)}">${esc(a==='all'?'ALL':a.toUpperCase())}</button>`).join('')}</div>
+  <div class="tasks-layout"><div>${section('DUE / OVERDUE','期限',todayRows,'NOTHING DUE')}</div><div>${section('UPCOMING','次',upcoming,'NO UPCOMING TASKS')}</div></div>
+  <div class="tasks-layout"><div>${section('ANYTIME','自由',anytime,'NO UNDATED TASKS')}</div><div>${section('RECENTLY COMPLETED','完了',done,'NOTHING COMPLETED YET')}</div></div>`;
+  document.querySelectorAll('[data-task-filter]').forEach(b=>b.onclick=()=>{STATE.taskFilter=b.dataset.taskFilter;renderTaskDashboard(data)});
+  bindTaskToggles();
+}
 
 function calendarEventChip(e,cls){
   const inner=`${esc(e.title)}`;
@@ -350,7 +412,7 @@ function daysFromNow(v){if(!v)return null;const d=startDay(new Date(v)),n=startD
 function courseName(t){if(t.course)return t.course;const m=String(t.title||'').match(/^([^:–—-]{2,28})[:–—-]\s/);return m?m[1].trim():'SCHOOL'}
 function renderSchoolPage(){
   const root=document.getElementById('app'),tasks=(STATE.bootstrap?.school||[]).slice();const overdue=tasks.filter(t=>daysFromNow(t.due)!=null&&daysFromNow(t.due)<0);const week=tasks.filter(t=>{const d=daysFromNow(t.due);return d!=null&&d>=0&&d<=7});const groups={};tasks.forEach(t=>{const k=courseName(t);(groups[k]||(groups[k]=[])).push(t)});
-  root.innerHTML=`<div class="page-head"><div><div class="page-title">SCHOOL // 学業</div><div class="panel-sub">OPEN WORK · DUE DATES · COURSE QUEUES</div></div>${dashboardDataSourceButton()}</div><div class="detail-stat-grid school-stats"><div class="detail-stat"><span>OPEN</span><b>${tasks.length}</b><em>TASKS</em></div><div class="detail-stat"><span>THIS WEEK</span><b>${week.length}</b><em>NEXT 7 DAYS</em></div><div class="detail-stat"><span>OVERDUE</span><b>${overdue.length}</b><em>${overdue.length?'NEEDS ATTENTION':'CLEAR'}</em></div><div class="detail-stat"><span>COURSES</span><b>${Object.keys(groups).length}</b><em>WITH OPEN WORK</em></div></div>${week.length?`<section class="panel school-week"><div class="panel-head"><div class="panel-title">THIS WEEK <span class="jp">今週</span></div></div><div class="panel-body task-list">${week.map((t,i)=>taskRow(t,i)).join('')}</div></section>`:''}<div class="course-grid">${Object.entries(groups).map(([course,rows])=>`<section class="panel course-card"><div class="panel-head"><div class="panel-title">${esc(course)}</div><div class="panel-sub">${rows.length} OPEN</div></div><div class="panel-body task-list">${rows.map((t,i)=>taskRow(t,i)).join('')}</div></section>`).join('')}</div>`;
+  root.innerHTML=`<div class="page-head"><div><div class="page-title">SCHOOL // 学業</div><div class="panel-sub">OPEN WORK · DUE DATES · COURSE QUEUES</div></div>${dashboardDataSourceButton()}</div><div class="detail-stat-grid school-stats"><div class="detail-stat"><span>OPEN</span><b>${tasks.length}</b><em>TASKS</em></div><div class="detail-stat"><span>THIS WEEK</span><b>${week.length}</b><em>NEXT 7 DAYS</em></div><div class="detail-stat"><span>OVERDUE</span><b>${overdue.length}</b><em>${overdue.length?'NEEDS ATTENTION':'CLEAR'}</em></div><div class="detail-stat"><span>COURSES</span><b>${Object.keys(groups).length}</b><em>WITH OPEN WORK</em></div></div>${week.length?`<section class="panel school-week"><div class="panel-head"><div class="panel-title">THIS WEEK <span class="jp">今週</span></div></div><div class="panel-body task-list">${week.map((t,i)=>taskRow(t,i)).join('')}</div></section>`:''}<div class="course-grid">${Object.entries(groups).map(([course,rows])=>`<section class="panel course-card"><div class="panel-head"><div class="panel-title">${esc(course)}</div><div class="panel-sub">${rows.length} OPEN</div></div><div class="panel-body task-list">${rows.map((t,i)=>taskRow(t,i)).join('')}</div></section>`).join('')}</div>`;bindTaskToggles();
 }
 function renderProjectsPage(){
   const root=document.getElementById('app'),projects=STATE.bootstrap?.projects||[],tasks=STATE.bootstrap?.projectTasks||[];const p=projects.find(x=>/rescue raft/i.test(x.name||''))||projects.find(x=>x.area==='Projects')||projects[0]||{};const progress=p.progress==null?null:Math.max(0,Math.min(1,Number(p.progress)));const budget=p.budget!=null?p.budget:RAFT_CONFIG.budget;
@@ -358,10 +420,14 @@ function renderProjectsPage(){
 }
 
 function openQuick(type){STATE.modalType=type;const backdrop=document.getElementById('modalBackdrop'),form=document.getElementById('quickForm'),title=document.getElementById('modalTitle');title.textContent=({task:'NEW TASK // 新規',school_task:'SCHOOL TASK // 学業',note:'NEW NOTE // メモ',wishlist:'WISHLIST // 欲しい物'})[type]||'NEW ITEM';form.innerHTML=quickFields(type);backdrop.classList.add('open');setTimeout(()=>form.querySelector('input')?.focus(),40)}
-function quickFields(type){if(type==='task'||type==='school_task')return `<div class="field full"><label>Task</label><input name="title" required></div><div class="field"><label>Due</label><input name="due" type="date"></div><div class="field"><label>Priority</label><select name="priority"><option value="">None</option><option>High</option><option>Medium</option><option>Low</option></select></div>${type==='task'?`<div class="field"><label>Area</label><select name="area"><option>Personal</option><option>School</option><option>Health</option><option>Projects</option><option>Collections</option></select></div>`:''}<div class="field full"><label>Details</label><textarea name="details"></textarea></div>`;if(type==='note')return `<div class="field full"><label>Title</label><input name="title" required></div><div class="field"><label>Area</label><select name="area"><option>Personal</option><option>School</option><option>Health</option><option>Projects</option><option>Collections</option></select></div><div class="field"><label>Type</label><select name="noteType"><option>Reference</option><option>Plan</option><option>Research</option><option>Decision</option><option>Test Result</option><option>Meeting Note</option><option>Journal</option></select></div><div class="field full"><label>Body</label><textarea name="body"></textarea></div>`;return `<div class="field full"><label>Item</label><input name="title" required></div><div class="field"><label>Category</label><input name="category" placeholder="Disc Golf, Tech, Clothing…"></div><div class="field"><label>Price</label><input name="price" placeholder="$99.99"></div><div class="field"><label>Store</label><input name="store"></div><div class="field"><label>Want level</label><select name="wantLevel"><option>Interested</option><option>High</option><option>Maybe</option></select></div><div class="field full"><label>Link</label><input name="link" type="url"></div>`}
+function quickFields(type){
+  if(type==='task'||type==='school_task')return `<div class="field full"><label>Task</label><input name="title" required></div><div class="field"><label>Due</label><input name="due" type="date"></div><div class="field"><label>Priority</label><select name="priority"><option value="">None</option><option>High</option><option>Medium</option><option>Low</option></select></div>${type==='task'?`<div class="field"><label>Area</label><select name="area"><option>Personal</option><option>School</option><option>Career</option><option>Health</option><option>Projects</option><option>Collections</option></select></div>`:''}<div class="field"><label>Repeat</label><select name="repeat"><option value="">Does not repeat</option><option>Daily</option><option>Weekly</option><option>Monthly</option><option>Yearly</option></select></div><div class="field"><label>Repeat until</label><input name="repeatUntil" type="date"></div><div class="field full"><label>Details</label><textarea name="details"></textarea></div>`;
+  if(type==='note')return `<div class="field full"><label>Title</label><input name="title" required></div><div class="field"><label>Area</label><select name="area"><option>Personal</option><option>School</option><option>Career</option><option>Health</option><option>Projects</option><option>Collections</option></select></div><div class="field"><label>Type</label><select name="noteType"><option>Reference</option><option>Plan</option><option>Research</option><option>Decision</option><option>Test Result</option><option>Meeting Note</option><option>Journal</option></select></div><div class="field full"><label>Body</label><textarea name="body"></textarea></div>`;
+  return `<div class="field full"><label>Item</label><input name="title" required></div><div class="field"><label>Category</label><input name="category" placeholder="Disc Golf, Tech, Clothing…"></div><div class="field"><label>Price</label><input name="price" placeholder="$99.99"></div><div class="field"><label>Store</label><input name="store"></div><div class="field"><label>Want level</label><select name="wantLevel"><option>Interested</option><option>High</option><option>Maybe</option></select></div><div class="field full"><label>Link</label><input name="link" type="url"></div>`;
+}
 function closeModal(){document.getElementById('modalBackdrop').classList.remove('open');STATE.modalType=null}
 document.getElementById('modalClose').onclick=closeModal;document.getElementById('modalCancel').onclick=e=>{e.preventDefault();closeModal()};document.getElementById('modalBackdrop').addEventListener('click',e=>{if(e.target.id==='modalBackdrop')closeModal()});
-document.getElementById('modalSave').onclick=async e=>{e.preventDefault();const form=document.getElementById('quickForm');const fd=new FormData(form),payload={};for(const[k,v]of fd.entries())payload[k]=v;const btn=e.currentTarget;btn.disabled=true;btn.textContent='SAVING…';try{await server('createQuickItem',STATE.modalType,payload);closeModal();if(STATE.modalType==='wishlist'){STATE.collectionCache={};}STATE.bootstrap=await server('getBootstrapData');if(STATE.route==='home')renderHome();else await renderCollections()}catch(err){alert(err.message)}finally{btn.disabled=false;btn.textContent='SAVE'}};
+document.getElementById('modalSave').onclick=async e=>{e.preventDefault();const form=document.getElementById('quickForm');const fd=new FormData(form),payload={};for(const[k,v]of fd.entries())payload[k]=v;const btn=e.currentTarget;btn.disabled=true;btn.textContent='SAVING…';try{const savedType=STATE.modalType;await server('createQuickItem',savedType,payload);closeModal();STATE.collectionCache={};STATE.taskDashboard=null;STATE.bootstrap=await server('getBootstrapData');if(STATE.route==='home')renderHome();else if(STATE.route==='tasks')await renderTasksPage();else if(STATE.route==='collections')await renderCollections();else navigate(STATE.route)}catch(err){alert(err.message)}finally{btn.disabled=false;btn.textContent='SAVE'}};
 document.addEventListener('keydown',e=>{if(e.target.matches('input,textarea,select'))return;if(e.key.toLowerCase()==='h')navigate('habits');if(e.key.toLowerCase()==='c')navigate('collections')});
 
 init();
