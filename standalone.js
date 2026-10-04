@@ -27,7 +27,7 @@
   }
   function savedToken(){
     try{
-      const x=JSON.parse(sessionStorage.getItem(TOKEN_KEY)||'null');
+      const x=JSON.parse(localStorage.getItem(TOKEN_KEY)||'null');
       return x&&x.accessToken&&x.expiresAt>Date.now()+60000?x:null;
     }catch(e){return null}
   }
@@ -80,7 +80,7 @@
           callback:(resp)=>{
             if(resp.error){reject(new Error(resp.error_description||resp.error));return}
             const token={accessToken:resp.access_token,expiresAt:Date.now()+(Number(resp.expires_in||3600)*1000)};
-            sessionStorage.setItem(TOKEN_KEY,JSON.stringify(token));
+            localStorage.setItem(TOKEN_KEY,JSON.stringify(token));
             hideGate();
             resolve(token);
           },
@@ -250,7 +250,7 @@
       return await dispatch(cfg,token,method,args);
     }catch(err){
       if(!err.auth) throw err;
-      sessionStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(TOKEN_KEY);
       token=await ensureToken(cfg,true);
       return dispatch(cfg,token,method,args);
     }
@@ -258,12 +258,12 @@
 
   window.resetDashboardConnection=function(){
     localStorage.removeItem(CONFIG_KEY);
-    sessionStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_KEY);
     location.reload();
   };
 
   if(new URLSearchParams(location.search).get('setup')==='1'){
     localStorage.removeItem(CONFIG_KEY);
-    sessionStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_KEY);
   }
 })();
