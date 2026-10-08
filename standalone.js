@@ -41,7 +41,7 @@
     return s;
   }
   function clearBridgeFrame(){
-    bridgePending.forEach(p=>p.reject(new Error('Dashboard bridge reset.')));
+    bridgePending.forEach(p=>p.reject(new Error('Dashboard API reset.')));
     bridgePending.clear();
     if(bridgeFrame){try{bridgeFrame.remove()}catch(e){}}
     bridgeFrame=null;bridgeReadyPromise=null;bridgePeer=null;bridgePeerOrigin='*';
@@ -52,56 +52,83 @@
     if(cfg.key.length<12)throw new Error('Dashboard key looks too short.');
     localStorage.setItem(BRIDGE_CONFIG_KEY,JSON.stringify(cfg));
     window.dashboardBridgeActive=true;
-    clearBridgeFrame();
     return cfg;
   }
-  function bridgeMessageHandler(ev){
-    if(!bridgeFrame)return;
-    const m=ev.data||{};
-    const trustedOrigin=ev.origin==='https://script.google.com'||/https:\/\/[^/]+-script\.googleusercontent\.com$/.test(ev.origin||'');
-    if(!trustedOrigin)return;
-    if(m.type==='pd-bridge-ready'){
-      bridgePeer=ev.source;
-      bridgePeerOrigin=ev.origin||'*';
-      if(bridgeFrame.__readyResolve)bridgeFrame.__readyResolve(true);
-      bridgeFrame.__readyResolve=null;bridgeFrame.__readyReject=null;
-      return;
-    }
-    if(m.type!=='pd-bridge-response'||!m.id||ev.source!==bridgePeer)return;
-    const p=bridgePending.get(m.id);if(!p)return;
-    bridgePending.delete(m.id);clearTimeout(p.timer);
-    if(m.ok)p.resolve(m.result);
-    else p.reject(new Error(m.error||'Dashboard bridge call failed.'));
-  }
-  window.addEventListener('message',bridgeMessageHandler);
-  function ensureBridgeFrame(){
+  function dashboardApiRead(method,args){
     const cfg=savedBridgeConfig();
-    if(!cfg)return Promise.reject(new Error('Dashboard bridge is not configured.'));
-    if(bridgeReadyPromise)return bridgeReadyPromise;
-    bridgeFrame=document.createElement('iframe');
-    bridgeFrame.setAttribute('aria-hidden','true');
-    bridgeFrame.tabIndex=-1;
-    bridgeFrame.style.cssText='position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-10000px;top:-10000px;border:0';
-    bridgeReadyPromise=new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{reject(new Error('Dashboard bridge did not respond. Check the Web app deployment and key.'));clearBridgeFrame();},12000);
-      bridgeFrame.__readyResolve=()=>{clearTimeout(timer);resolve(true)};
-      bridgeFrame.__readyReject=e=>{clearTimeout(timer);reject(e)};
+    if(!cfg)return Promise.reject(new Error('Dashboard backend is not configured.'));
+    return new Promise((resolve,reject)=>{
+      const id='__pdcb'+Date.now().toString(36)+(++bridgeSeq).toString(36);
+      const script=document.createElement('script');
+      const timer=setTimeout(()=>{
+        try{delete window[id]}catch(e){}
+        try{script.remove()}catch(e){}
+        reject(new Error('Dashboard backend did not respond. Check the Web app deployment and key.'));
+      },15000);
+      window[id]=(payload)=>{
+        clearTimeout(timer);
+        try{delete window[id]}catch(e){}
+        try{script.remove()}catch(e){}
+        if(payload&&payload.ok)resolve(payload.result);
+        else reject(new Error(payload&&payload.error?payload.error:'Dashboard backend request failed.'));
+      };
+      const q=new URLSearchParams({
+        mode:'api',
+        key:cfg.key,
+        method:String(method||''),
+        payload:JSON.stringify(args||[]),
+        callback:id,
+        _t:String(Date.now())
+      });
+      script.async=true;
+      script.onerror=()=>{
+        clearTimeout(timer);
+        try{delete window[id]}catch(e){}
+        try{script.remove()}catch(e){}
+        reject(new Error('Dashboard backend could not be loaded.'));
+      };
+      script.src=cfg.url+'?'+q.toString();
+      document.head.appendChild(script);
     });
-    bridgeFrame.src=cfg.url+'?mode=bridge&key='+encodeURIComponent(cfg.key);
-    document.body.appendChild(bridgeFrame);
-    return bridgeReadyPromise;
+  }
+  async function dashboardApiWrite(method,args){
+    const cfg=savedBridgeConfig();
+    if(!cfg)throw new Error('Dashboard backend is not configured.');
+    const body=new URLSearchParams({
+      mode:'api',
+      key:cfg.key,
+      method:String(method||''),
+      payload:JSON.stringify(args||[])
+    });
+    await fetch(cfg.url,{
+      method:'POST',
+      mode:'no-cors',
+      cache:'no-store',
+      credentials:'omit',
+      redirect:'follow',
+      body
+    });
+    if(method==='toggleHabit'){
+      const p=args&&args[0]||{},habits=await dashboardApiRead('getLiveHabits',[]);
+      const h=(habits||[]).find(x=>String(x.cardId)===String(p.cardId));
+      return {done:Boolean(h&&h.done),logId:h&&h.logId||null};
+    }
+    if(method==='toggleTask'){
+      const id=args&&args[0],data=await dashboardApiRead('getTaskDashboardData',[]);
+      const all=[...(data&&data.open||[]),...(data&&data.completed||[])];
+      const t=all.find(x=>String(x.id)===String(id));
+      return {ok:true,id,done:Boolean(t&&t.done)};
+    }
+    if(method==='setHabitState'){
+      const p=args&&args[0]||{},habits=await dashboardApiRead('getLiveHabits',[]);
+      const h=(habits||[]).find(x=>String(x.cardId)===String(p.cardId));
+      return {done:Boolean(h&&h.done),logId:h&&h.logId||null};
+    }
+    return {ok:true};
   }
   async function bridgeCall(method,args){
-    await ensureBridgeFrame();
-    return new Promise((resolve,reject)=>{
-      const id='b'+Date.now().toString(36)+(++bridgeSeq).toString(36);
-      const timer=setTimeout(()=>{bridgePending.delete(id);reject(new Error('Dashboard bridge request timed out.'));},20000);
-      bridgePending.set(id,{resolve,reject,timer});
-      try{
-        if(!bridgePeer)throw new Error('Dashboard bridge is not ready.');
-        bridgePeer.postMessage({type:'pd-bridge-request',id,method,args:args||[]},bridgePeerOrigin||'*');
-      }catch(e){clearTimeout(timer);bridgePending.delete(id);reject(e)}
-    });
+    const writes=new Set(['toggleHabit','setHabitState','toggleTask','updateTask','deleteTask','createQuickItem']);
+    return writes.has(method)?dashboardApiWrite(method,args||[]):dashboardApiRead(method,args||[]);
   }
   window.dashboardBridgeActive=Boolean(savedBridgeConfig());
 
