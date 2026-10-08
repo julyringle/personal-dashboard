@@ -480,6 +480,15 @@
         const now=Date.now(),ws=Date.parse(value.calendar.weekStart||''),we=Date.parse(value.calendar.weekEnd||'');
         if(!Number.isFinite(ws)||!Number.isFinite(we)||now<ws||now>=we)value.calendar=null;
       }
+    }else if(method==='getCalendarWeek'&&value){
+      const now=Date.now(),ws=Date.parse(value.weekStart||''),we=Date.parse(value.weekEnd||'');
+      if((args=>Array.isArray(args)&&Number(args[0]||0)===0)(record.args)&&(!Number.isFinite(ws)||!Number.isFinite(we)||now<ws||now>=we))return null;
+    }else if(method==='getHabitDashboardData'&&value&&Array.isArray(value.days)){
+      value.days=value.days.map(d=>{
+        if(!d||!d.date)return d;
+        if(d.date===today)return {...d,future:false};
+        return {...d,future:String(d.date)>today};
+      });
     }
     return value;
   }
