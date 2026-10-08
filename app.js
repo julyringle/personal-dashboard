@@ -3,7 +3,7 @@ const STATE = {
   collectionTab:(localStorage.getItem('dashboardCollectionTab')||'wishlist'), collectionCache:{},
   pokemonGen:'1', pokemonFilter:'all', wishlistCategory:'all', onePiecePage:'all',
   modalType:null, editingTaskId:null, habitDashboard:null, taskDashboard:null, taskFilter:'all',
-  bootstrapFetchedAt:0, healthRefreshPromise:null
+  bootstrapFetchedAt:0, healthRefreshPromise:null, lastDayKey:null, bootstrapRefreshPromise:null
 };
 const GEN_COLORS={1:'#8E3E42',2:'#A8642A',3:'#A88D3E',4:'#4E725C',5:'#536979',6:'#6E547A',7:'#8A526C',8:'#79634F',9:'#73777C'};
 const RAFT_CONFIG={
@@ -41,6 +41,11 @@ function fmtDate(v,opts={month:'short',day:'2-digit'}){if(!v)return'—';const d
 function fmtTime(v){if(!v)return'';return new Intl.DateTimeFormat('en-US',{hour:'numeric',minute:'2-digit'}).format(new Date(v))}
 function sameDay(a,b){return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate()}
 function startDay(d){const x=new Date(d);x.setHours(0,0,0,0);return x}
+function localDayKey(){
+  const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+  const out={};parts.forEach(p=>{if(p.type!=='literal')out[p.type]=p.value});
+  return out.year+'-'+out.month+'-'+out.day;
+}
 function setting(name){return (STATE.bootstrap?.settings||[]).find(x=>x.setting===name)}
 function settingNum(name,fallback){const x=setting(name);return x && x.number!=null?Number(x.number):fallback}
 function settingVal(name,fallback){const x=setting(name);return x && x.value?x.value:fallback}
@@ -76,27 +81,78 @@ function setPageChrome(route){
   const main=document.querySelector('.brand-main'),jp=document.querySelector('.brand .jp');
   if(main)main.textContent=pair[0];if(jp)jp.textContent=pair[1];document.title=pair[0];
 }
+function renderCurrentRoute(){
+  const route=STATE.route;
+  if(route==='tasks')renderTasksPage();
+  else if(route==='habits')renderHabitsPage();
+  else if(route==='health')renderHealthPage();
+  else if(route==='school')renderSchoolPage();
+  else if(route==='projects')renderProjectsPage();
+  else if(route==='collections')renderCollections();
+  else renderHome();
+}
 function navigate(route){
   STATE.route=route;document.body.classList.add('route-changing');document.body.dataset.page=route;setPageChrome(route);
   document.querySelectorAll('[data-route]').forEach(b=>b.classList.toggle('active',b.dataset.route===route));
-  if(route==='tasks')renderTasksPage();else if(route==='habits')renderHabitsPage();else if(route==='health'){renderHealthPage();if(Date.now()-Number(STATE.bootstrapFetchedAt||0)>5000)refreshHealthLive();}else if(route==='school')renderSchoolPage();else if(route==='projects')renderProjectsPage();else if(route==='collections')renderCollections();else renderHome();
+  renderCurrentRoute();
+  const stale=Date.now()-Number(STATE.bootstrapFetchedAt||0)>120000;
+  if(stale&&(route==='home'||route==='health'))refreshBootstrapLive();
   requestAnimationFrame(()=>requestAnimationFrame(()=>document.body.classList.remove('route-changing')));
 }
-async function refreshHealthLive(){
-  if(STATE.healthRefreshPromise)return STATE.healthRefreshPromise;
-  STATE.healthRefreshPromise=(async()=>{
+async function refreshBootstrapLive(){
+  if(STATE.bootstrapRefreshPromise)return STATE.bootstrapRefreshPromise;
+  STATE.bootstrapRefreshPromise=(async()=>{
     try{
+      const before=STATE.lastDayKey||localDayKey();
       const boot=await server('getBootstrapData');
-      STATE.bootstrap=boot;STATE.bootstrapFetchedAt=Date.now();
-      if(STATE.route==='health')renderHealthPage();
-    }catch(e){console.warn('Health refresh failed',e)}
-    finally{STATE.healthRefreshPromise=null}
+      const nowDay=localDayKey(),dayChanged=before!==nowDay;
+      STATE.bootstrap=boot;STATE.bootstrapFetchedAt=Date.now();STATE.lastDayKey=nowDay;
+      if(dayChanged){STATE.weekOffset=0;STATE.habitDashboard=null;}
+      applyTheme();
+      if(STATE.route==='habits'&&dayChanged)await renderHabitsPage();
+      else renderCurrentRoute();
+    }catch(e){console.warn('Dashboard refresh failed',e)}
+    finally{STATE.bootstrapRefreshPromise=null}
   })();
-  return STATE.healthRefreshPromise;
+  return STATE.bootstrapRefreshPromise;
 }
+async function refreshHealthLive(){return refreshBootstrapLive()}
+
+window.addEventListener('dashboard-data-refreshed',async e=>{
+  const boot=e&&e.detail&&e.detail.bootstrap;if(!boot)return;
+  const before=STATE.lastDayKey||localDayKey(),nowDay=localDayKey(),dayChanged=before!==nowDay;
+  STATE.bootstrap=boot;STATE.bootstrapFetchedAt=Date.now();STATE.lastDayKey=nowDay;
+  if(dayChanged){STATE.weekOffset=0;STATE.habitDashboard=null;}
+  applyTheme();
+  if(STATE.route==='habits'&&dayChanged)await renderHabitsPage();
+  else renderCurrentRoute();
+});
+window.addEventListener('dashboard-day-changed',()=>{
+  const day=localDayKey();
+  if(STATE.lastDayKey===day)return;
+  STATE.lastDayKey=day;STATE.weekOffset=0;STATE.habitDashboard=null;
+  if(STATE.bootstrap&&Array.isArray(STATE.bootstrap.habits))STATE.bootstrap.habits=STATE.bootstrap.habits.map(h=>({...h,done:false,logId:null}));
+  if(STATE.route==='habits')renderHabitsPage();else renderCurrentRoute();
+});
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState!=='visible')return;
+  const day=localDayKey(),changed=STATE.lastDayKey&&STATE.lastDayKey!==day;
+  if(changed){STATE.lastDayKey=day;STATE.weekOffset=0;STATE.habitDashboard=null;}
+  if(!window.__DASHBOARD_STANDALONE__&&(changed||Date.now()-Number(STATE.bootstrapFetchedAt||0)>120000))refreshBootstrapLive();
+  else if(changed)renderCurrentRoute();
+});
+setInterval(()=>{
+  const day=localDayKey();
+  if(STATE.lastDayKey&&STATE.lastDayKey!==day){
+    STATE.lastDayKey=day;STATE.weekOffset=0;STATE.habitDashboard=null;
+    if(STATE.bootstrap&&Array.isArray(STATE.bootstrap.habits))STATE.bootstrap.habits=STATE.bootstrap.habits.map(h=>({...h,done:false,logId:null}));
+    renderCurrentRoute();
+    if(!window.__DASHBOARD_STANDALONE__)refreshBootstrapLive();
+  }
+},60000);
 
 async function init(){
-  try{STATE.bootstrap=await server('getBootstrapData');STATE.bootstrapFetchedAt=Date.now();applyTheme();updateClock();navigate(STATE.route);if(STATE.bootstrap.errors?.length)console.warn(STATE.bootstrap.errors)}catch(e){document.getElementById('app').innerHTML=`<div class="error">${esc(e.message)}</div>`}
+  try{STATE.lastDayKey=localDayKey();STATE.bootstrap=await server('getBootstrapData');STATE.bootstrapFetchedAt=Date.now();applyTheme();updateClock();navigate(STATE.route);if(STATE.bootstrap.errors?.length)console.warn(STATE.bootstrap.errors)}catch(e){document.getElementById('app').innerHTML=`<div class="error">${esc(e.message)}</div>`}
 }
 
 function panel(title,jp,body,opts={}){return `<section class="panel ${opts.className||''}"><div class="panel-head"><div class="panel-title">${esc(title)} <span class="jp">${esc(jp||'')}</span></div>${opts.right||''}</div>${body}</section>`}
