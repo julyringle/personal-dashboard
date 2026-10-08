@@ -8,7 +8,7 @@
   const LAST_SYNC_KEY='pdLastSyncAtV1';
   const LAST_DAY_KEY='pdLastDayKeyV1';
   const BRIDGE_CONFIG_KEY='pdBridgeConfigV1';
-  const DEFAULT_BRIDGE_URL='https://script.google.com/macros/s/AKfycbyEuDlaExgHOHgpj_dfRkJnoDLD-z_ijobrcTiou3_9dhFLiQYzo3nIAq-u04aVpWiy/exec';
+  const DEFAULT_BRIDGE_URL='https://script.google.com/macros/s/AKfycbyNloGOfa7vBQS3RFgpYJrXtbu2edgZKEmRqsUIhmPEvgodOT48eSfDfaV2cvoFKd2q/exec';
   const SCOPES=[
     'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/spreadsheets',
