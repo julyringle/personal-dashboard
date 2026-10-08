@@ -982,9 +982,9 @@
   function showBridgeSetup(){
     const existing=savedBridgeConfig()||{url:DEFAULT_BRIDGE_URL,key:''};
     showCard(`
-      <div class="standalone-kicker">PRIVATE DASHBOARD // BRIDGE</div>
+      <div class="standalone-kicker">PRIVATE DASHBOARD // DIRECT API V12</div>
       <h1>Connect dashboard backend</h1>
-      <p>This is a one-time setup for this device. The private key stays in this browser and is never saved to GitHub.</p>
+      <p>This is a one-time setup for this device. DIRECT API V12 bypasses browser Google OAuth and the old iframe bridge. The private key stays in this browser and is never saved to GitHub.</p>
       <label style="display:block;text-align:left;margin:14px 0 5px">Apps Script Web app URL</label>
       <input id="bridgeUrl" autocomplete="off" spellcheck="false" value="${existing.url||DEFAULT_BRIDGE_URL}" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%;box-sizing:border-box;padding:12px" readonly>
       <label style="display:block;text-align:left;margin:14px 0 5px">Private dashboard key</label>
