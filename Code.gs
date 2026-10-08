@@ -9,6 +9,9 @@ const APP = Object.freeze({
 });
 
 function doGet(e) {
+  const mode = e && e.parameter ? String(e.parameter.mode || '').toLowerCase() : '';
+  if (mode === 'api') return dashboardApiGet_(e);
+
   const props = PropertiesService.getScriptProperties();
   const expected = props.getProperty('EMBED_KEY');
   const supplied = e && e.parameter ? e.parameter.key : '';
@@ -20,7 +23,6 @@ function doGet(e) {
     ).setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
   }
 
-  const mode = e && e.parameter ? String(e.parameter.mode || '').toLowerCase() : '';
   if (mode === 'bridge') {
     return HtmlService.createHtmlOutput(getDashboardBridgeHtml_())
       .setTitle('Dashboard Bridge')
@@ -43,6 +45,97 @@ function doGet(e) {
     .setTitle('Home')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+function dashboardApiAuthorized_(e) {
+  const expected = PropertiesService.getScriptProperties().getProperty('EMBED_KEY');
+  const supplied = e && e.parameter ? String(e.parameter.key || '') : '';
+  return !!expected && supplied === expected;
+}
+
+function dashboardApiArgs_(e) {
+  const raw = e && e.parameter ? String(e.parameter.payload || '[]') : '[]';
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function dashboardApiDispatch_(method, args, allowWrite) {
+  args = args || [];
+  switch (String(method || '')) {
+    case 'getBootstrapData': return getBootstrapData();
+    case 'getCalendarWeek': return getCalendarWeek(args[0]);
+    case 'getHabitDashboardData': return getHabitDashboardData();
+    case 'getTaskDashboardData': return getTaskDashboardData();
+    case 'getCollectionData': return getCollectionData(args[0], args[1]);
+    case 'getLiveHabits': return getLiveHabits();
+    case 'toggleHabit':
+      if (!allowWrite) throw new Error('Write method requires POST.');
+      return toggleHabit(args[0]);
+    case 'setHabitState':
+      if (!allowWrite) throw new Error('Write method requires POST.');
+      return setHabitState(args[0]);
+    case 'toggleTask':
+      if (!allowWrite) throw new Error('Write method requires POST.');
+      return toggleTask(args[0]);
+    case 'updateTask':
+      if (!allowWrite) throw new Error('Write method requires POST.');
+      return updateTask(args[0], args[1]);
+    case 'deleteTask':
+      if (!allowWrite) throw new Error('Write method requires POST.');
+      return deleteTask(args[0]);
+    case 'createQuickItem':
+      if (!allowWrite) throw new Error('Write method requires POST.');
+      return createQuickItem(args[0], args[1]);
+    default:
+      throw new Error('Dashboard API method not allowed.');
+  }
+}
+
+function dashboardApiJsonp_(callback, payload) {
+  callback = String(callback || '');
+  if (!/^__pdcb[A-Za-z0-9_]+$/.test(callback)) {
+    callback = '__pdcbInvalid';
+    payload = {ok:false,error:'Invalid callback.'};
+  }
+  return ContentService
+    .createTextOutput(callback + '(' + JSON.stringify(payload) + ');')
+    .setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
+
+function dashboardApiGet_(e) {
+  const callback = e && e.parameter ? e.parameter.callback : '';
+  if (!dashboardApiAuthorized_(e)) {
+    return dashboardApiJsonp_(callback, {ok:false,error:'Dashboard key rejected.'});
+  }
+  try {
+    const result = dashboardApiDispatch_(e.parameter.method, dashboardApiArgs_(e), false);
+    return dashboardApiJsonp_(callback, {ok:true,result:result});
+  } catch (err) {
+    return dashboardApiJsonp_(callback, {ok:false,error:String(err && err.message ? err.message : err)});
+  }
+}
+
+function doPost(e) {
+  if (!e || !e.parameter || String(e.parameter.mode || '').toLowerCase() !== 'api') {
+    return ContentService.createTextOutput(JSON.stringify({ok:false,error:'Unsupported request.'}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  if (!dashboardApiAuthorized_(e)) {
+    return ContentService.createTextOutput(JSON.stringify({ok:false,error:'Dashboard key rejected.'}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  try {
+    const result = dashboardApiDispatch_(e.parameter.method, dashboardApiArgs_(e), true);
+    return ContentService.createTextOutput(JSON.stringify({ok:true,result:result}))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ok:false,error:String(err && err.message ? err.message : err)}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 function getDashboardBridgeHtml_() {
