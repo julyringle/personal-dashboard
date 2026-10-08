@@ -16,8 +16,16 @@ function doGet(e) {
   if (!expected || supplied !== expected) {
     return HtmlService.createHtmlOutput(
       '<!doctype html><html><body style="background:#0b0d0f;color:#e5e2dc;font:14px system-ui;padding:28px">' +
-      '<b>Dashboard locked.</b><br><span style="color:#747a80">Missing or invalid embed key.</span></body></html>'
+      '<b>Dashboard locked.</b><br><span style="color:#747a80">Missing or invalid dashboard key.</span></body></html>'
     ).setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  }
+
+  const mode = e && e.parameter ? String(e.parameter.mode || '').toLowerCase() : '';
+  if (mode === 'bridge') {
+    return HtmlService.createHtmlOutput(getDashboardBridgeHtml_())
+      .setTitle('Dashboard Bridge')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
   }
 
   let html;
@@ -35,6 +43,44 @@ function doGet(e) {
     .setTitle('Home')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+function getDashboardBridgeHtml_() {
+  return '<!doctype html><html><head>' +
+    '<meta charset="utf-8"><meta name="referrer" content="no-referrer">' +
+    '</head><body><script>' +
+    '(function(){' +
+    'var PARENT="https://julyringle.github.io";' +
+    'var ALLOWED={"getBootstrapData":1,"getCalendarWeek":1,"getHabitDashboardData":1,"getTaskDashboardData":1,"getCollectionData":1,"getLiveHabits":1,"toggleHabit":1,"setHabitState":1,"toggleTask":1,"updateTask":1,"deleteTask":1,"createQuickItem":1};' +
+    'function send(target,origin,payload){try{target.postMessage(payload,origin);}catch(e){}}' +
+    'window.addEventListener("message",function(ev){' +
+      'if(ev.origin!==PARENT)return;' +
+      'var m=ev.data||{};if(m.type!=="pd-bridge-request"||!ALLOWED[m.method])return;' +
+      'var id=m.id,args=Array.isArray(m.args)?m.args:[];' +
+      'var ok=function(result){send(ev.source,ev.origin,{type:"pd-bridge-response",id:id,ok:true,result:result});};' +
+      'var fail=function(err){send(ev.source,ev.origin,{type:"pd-bridge-response",id:id,ok:false,error:(err&&err.message)?err.message:String(err||"Bridge call failed")});};' +
+      'try{' +
+        'var r=google.script.run.withSuccessHandler(ok).withFailureHandler(fail);' +
+        'switch(m.method){' +
+          'case "getBootstrapData":r.getBootstrapData();break;' +
+          'case "getCalendarWeek":r.getCalendarWeek.apply(r,args);break;' +
+          'case "getHabitDashboardData":r.getHabitDashboardData();break;' +
+          'case "getTaskDashboardData":r.getTaskDashboardData();break;' +
+          'case "getCollectionData":r.getCollectionData.apply(r,args);break;' +
+          'case "getLiveHabits":r.getLiveHabits();break;' +
+          'case "toggleHabit":r.toggleHabit.apply(r,args);break;' +
+          'case "setHabitState":r.setHabitState.apply(r,args);break;' +
+          'case "toggleTask":r.toggleTask.apply(r,args);break;' +
+          'case "updateTask":r.updateTask.apply(r,args);break;' +
+          'case "deleteTask":r.deleteTask.apply(r,args);break;' +
+          'case "createQuickItem":r.createQuickItem.apply(r,args);break;' +
+          'default:fail(new Error("Method not allowed"));' +
+        '}' +
+      '}catch(ex){fail(ex);}' +
+    '});' +
+    'send(window.parent,PARENT,{type:"pd-bridge-ready"});' +
+    '})();' +
+    '<\/script></body></html>';
 }
 
 function getFrontendHtml_() {
@@ -236,6 +282,10 @@ function getHealthSummary_() {
 }
 
 function getHabits_() {
+  return getHabitsSheet_();
+}
+
+function getLiveHabits() {
   return getHabitsSheet_();
 }
 
