@@ -78,7 +78,8 @@ function getDashboardBridgeHtml_() {
         '}' +
       '}catch(ex){fail(ex);}' +
     '});' +
-    'send(window.parent,PARENT,{type:"pd-bridge-ready"});' +
+    'function ready(){send(window.top,PARENT,{type:"pd-bridge-ready"});}' +
+    'ready();setTimeout(ready,500);setTimeout(ready,1500);' +
     '})();' +
     '<\/script></body></html>';
 }
