@@ -7,12 +7,14 @@
   const OFFLINE_DB='pdOfflineV1';
   const LAST_SYNC_KEY='pdLastSyncAtV1';
   const LAST_DAY_KEY='pdLastDayKeyV1';
+  const BRIDGE_CONFIG_KEY='pdBridgeConfigV1';
   const SCOPES=[
     'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/script.external_request'
   ].join(' ');
-  let gate=null,configPromise=null,authPromise=null;
+  let gate=null,configPromise=null,authPromise=null,bridgeFrame=null,bridgeReadyPromise=null,bridgeSeq=0;
+  const bridgePending=new Map();
 
   function inAppsScriptHost(){
     return typeof google!=='undefined' && google.script && google.script.run;
@@ -20,6 +22,81 @@
   if(inAppsScriptHost()) return;
 
   window.__DASHBOARD_STANDALONE__=true;
+  function savedBridgeConfig(){
+    try{
+      const x=JSON.parse(localStorage.getItem(BRIDGE_CONFIG_KEY)||'null');
+      if(x&&x.url&&x.key)return x;
+    }catch(e){}
+    return null;
+  }
+  function normalizeBridgeUrl(url){
+    let s=String(url||'').trim();
+    if(!s)return'';
+    try{
+      const u=new URL(s);
+      u.search='';u.hash='';
+      s=u.toString().replace(/\/$/,'');
+    }catch(e){}
+    return s;
+  }
+  function clearBridgeFrame(){
+    bridgePending.forEach(p=>p.reject(new Error('Dashboard bridge reset.')));
+    bridgePending.clear();
+    if(bridgeFrame){try{bridgeFrame.remove()}catch(e){}}
+    bridgeFrame=null;bridgeReadyPromise=null;
+  }
+  function saveBridgeConfig(url,key){
+    const cfg={url:normalizeBridgeUrl(url),key:String(key||'').trim()};
+    if(!cfg.url||!/\/exec$/.test(cfg.url))throw new Error('Use the Apps Script Web app URL ending in /exec.');
+    if(cfg.key.length<12)throw new Error('Dashboard key looks too short.');
+    localStorage.setItem(BRIDGE_CONFIG_KEY,JSON.stringify(cfg));
+    window.dashboardBridgeActive=true;
+    clearBridgeFrame();
+    return cfg;
+  }
+  function bridgeMessageHandler(ev){
+    if(!bridgeFrame||ev.source!==bridgeFrame.contentWindow)return;
+    const m=ev.data||{};
+    if(m.type==='pd-bridge-ready'){
+      if(bridgeFrame.__readyResolve)bridgeFrame.__readyResolve(true);
+      bridgeFrame.__readyResolve=null;bridgeFrame.__readyReject=null;
+      return;
+    }
+    if(m.type!=='pd-bridge-response'||!m.id)return;
+    const p=bridgePending.get(m.id);if(!p)return;
+    bridgePending.delete(m.id);clearTimeout(p.timer);
+    if(m.ok)p.resolve(m.result);
+    else p.reject(new Error(m.error||'Dashboard bridge call failed.'));
+  }
+  window.addEventListener('message',bridgeMessageHandler);
+  function ensureBridgeFrame(){
+    const cfg=savedBridgeConfig();
+    if(!cfg)return Promise.reject(new Error('Dashboard bridge is not configured.'));
+    if(bridgeReadyPromise)return bridgeReadyPromise;
+    bridgeFrame=document.createElement('iframe');
+    bridgeFrame.setAttribute('aria-hidden','true');
+    bridgeFrame.tabIndex=-1;
+    bridgeFrame.style.cssText='position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-10000px;top:-10000px;border:0';
+    bridgeReadyPromise=new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{reject(new Error('Dashboard bridge did not respond. Check the Web app deployment and key.'));clearBridgeFrame();},12000);
+      bridgeFrame.__readyResolve=()=>{clearTimeout(timer);resolve(true)};
+      bridgeFrame.__readyReject=e=>{clearTimeout(timer);reject(e)};
+    });
+    bridgeFrame.src=cfg.url+'?mode=bridge&key='+encodeURIComponent(cfg.key);
+    document.body.appendChild(bridgeFrame);
+    return bridgeReadyPromise;
+  }
+  async function bridgeCall(method,args){
+    await ensureBridgeFrame();
+    return new Promise((resolve,reject)=>{
+      const id='b'+Date.now().toString(36)+(++bridgeSeq).toString(36);
+      const timer=setTimeout(()=>{bridgePending.delete(id);reject(new Error('Dashboard bridge request timed out.'));},20000);
+      bridgePending.set(id,{resolve,reject,timer});
+      try{bridgeFrame.contentWindow.postMessage({type:'pd-bridge-request',id,method,args:args||[]},'*')}
+      catch(e){clearTimeout(timer);bridgePending.delete(id);reject(e)}
+    });
+  }
+  window.dashboardBridgeActive=Boolean(savedBridgeConfig());
 
   function savedConfig(){
     try{
@@ -452,7 +529,7 @@
       online:navigator.onLine,
       queued:0,
       lastSync:Number(localStorage.getItem(LAST_SYNC_KEY)||0)||null,
-      needsAuth:!savedToken()&&navigator.onLine,
+      needsAuth:!savedBridgeConfig()&&!savedToken()&&navigator.onLine,
       fromCache:false,
       ...extra
     };
@@ -618,6 +695,21 @@
     }
     throw new Error('This action needs an internet connection.');
   }
+  async function flushQueueBridge(){
+    const items=(await dbAll('queue')).sort((a,b)=>Number(a.id)-Number(b.id));
+    for(const item of items){
+      const method=item.method==='setHabitState'?'setHabitState':item.method;
+      let args=item.args||[];
+      if(method==='createQuickItem'&&args[1]&&typeof args[1]==='object'){
+        const p={...args[1]};delete p.__offlineId;args=[args[0],p];
+      }
+      await bridgeCall(method,args);
+      await dbDelete('queue',item.id);
+    }
+    if(items.length)setLastSync();
+    emitState({needsAuth:false,fromCache:false});
+    return items.length;
+  }
   async function performQueued(cfg,token,item){
     if(item.method==='setHabitState'){
       const wanted=(item.args&&item.args[0])||{};
@@ -689,6 +781,22 @@
 
   async function trySilentRefresh(){
     if(!navigator.onLine)return false;
+    if(savedBridgeConfig()){
+      try{
+        await flushQueueBridge();
+        const boot=await bridgeCall('getBootstrapData',[]);
+        await writeCached('getBootstrapData',[],boot);
+        try{await writeCached('getTaskDashboardData',[],await bridgeCall('getTaskDashboardData',[]))}catch(e){}
+        try{await writeCached('getHabitDashboardData',[],await bridgeCall('getHabitDashboardData',[]))}catch(e){}
+        setLastSync();localStorage.setItem(LAST_DAY_KEY,dateKeyCentral(new Date()));
+        emitState({fromCache:false,needsAuth:false});
+        window.dispatchEvent(new CustomEvent('dashboard-data-refreshed',{detail:{bootstrap:cloneValue(boot)}}));
+        return true;
+      }catch(e){
+        emitState({fromCache:true,needsAuth:false});
+        return false;
+      }
+    }
     const cfg=await ensureConfig();
     let token=savedToken();
     if(!token){
@@ -705,6 +813,27 @@
   window.dashboardRemoteRun=async function(method,args){
     args=args||[];
     const cached=CACHEABLE.has(method)?await readCached(method,args):null;
+
+    if(savedBridgeConfig()){
+      if(!navigator.onLine){
+        if(isWrite(method,args))return offlineWrite(method,args);
+        if(cached){emitState({fromCache:true,needsAuth:false});return normalizeCachedValue(method,cached)}
+        throw new Error('OFFLINE // No saved copy of this data yet.');
+      }
+      try{
+        await flushQueueBridge();
+        const result=await bridgeCall(method,args);
+        if(CACHEABLE.has(method))await writeCached(method,args,result);
+        setLastSync();localStorage.setItem(LAST_DAY_KEY,dateKeyCentral(new Date()));
+        emitState({fromCache:false,needsAuth:false});
+        return result;
+      }catch(err){
+        const networkish=!navigator.onLine||/failed to fetch|network|load failed|offline|timed out|bridge/i.test(String(err&&err.message||err));
+        if(networkish&&isWrite(method,args))return offlineWrite(method,args);
+        if(CACHEABLE.has(method)&&cached){emitState({fromCache:true,needsAuth:false});return normalizeCachedValue(method,cached)}
+        throw err;
+      }
+    }
     if(!navigator.onLine){
       if(isWrite(method,args))return offlineWrite(method,args);
       if(cached){emitState({fromCache:true,needsAuth:false});return normalizeCachedValue(method,cached)}
@@ -762,6 +891,17 @@
 
   window.forceDashboardSync=async function(){
     if(!navigator.onLine){emitState({fromCache:true,needsAuth:false});return false}
+    if(savedBridgeConfig()){
+      await flushQueueBridge();
+      const boot=await bridgeCall('getBootstrapData',[]);
+      await writeCached('getBootstrapData',[],boot);
+      try{await writeCached('getTaskDashboardData',[],await bridgeCall('getTaskDashboardData',[]))}catch(e){}
+      try{await writeCached('getHabitDashboardData',[],await bridgeCall('getHabitDashboardData',[]))}catch(e){}
+      setLastSync();localStorage.setItem(LAST_DAY_KEY,dateKeyCentral(new Date()));
+      emitState({fromCache:false,needsAuth:false});
+      window.dispatchEvent(new CustomEvent('dashboard-data-refreshed',{detail:{bootstrap:cloneValue(boot)}}));
+      return true;
+    }
     const cfg=await ensureConfig();
     let token=savedToken();
     if(!token){
@@ -771,6 +911,7 @@
     await refreshPrimaryCaches(cfg,token);
     return true;
   };
+
   window.dashboardAutoSync=trySilentRefresh;
 
   window.addEventListener('online',()=>{emitState();trySilentRefresh().catch(()=>{})});
@@ -799,8 +940,46 @@
   window.resetDashboardConnection=function(){
     localStorage.removeItem(CONFIG_KEY);
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(BRIDGE_CONFIG_KEY);
+    clearBridgeFrame();
     location.reload();
   };
+
+  function showBridgeSetup(){
+    const existing=savedBridgeConfig()||{};
+    showCard(`
+      <div class="standalone-kicker">PRIVATE DASHBOARD // BRIDGE</div>
+      <h1>Connect dashboard backend</h1>
+      <p>This is a one-time setup for this device. The private key stays in this browser and is never saved to GitHub.</p>
+      <label style="display:block;text-align:left;margin:14px 0 5px">Apps Script Web app URL</label>
+      <input id="bridgeUrl" autocomplete="off" spellcheck="false" value="${existing.url||''}" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%;box-sizing:border-box;padding:12px">
+      <label style="display:block;text-align:left;margin:14px 0 5px">Private dashboard key</label>
+      <input id="bridgeKey" type="password" autocomplete="off" spellcheck="false" value="" placeholder="EMBED_KEY from Apps Script properties" style="width:100%;box-sizing:border-box;padding:12px">
+      <button id="bridgeSave" class="standalone-primary" style="margin-top:16px">TEST & SAVE</button>
+      <div id="bridgeStatus" class="standalone-note">The key is stored only on this device.</div>
+    `);
+    document.getElementById('bridgeSave').onclick=async()=>{
+      const status=document.getElementById('bridgeStatus');
+      try{
+        const url=document.getElementById('bridgeUrl').value;
+        const key=document.getElementById('bridgeKey').value||(existing.key||'');
+        saveBridgeConfig(url,key);
+        status.textContent='Testing bridge…';
+        const habits=await bridgeCall('getLiveHabits',[]);
+        if(!Array.isArray(habits))throw new Error('Bridge returned an unexpected response.');
+        status.textContent='Connected. Reloading…';
+        const u=new URL(location.href);u.searchParams.delete('bridgeSetup');history.replaceState(null,'',u.toString());
+        setTimeout(()=>location.reload(),250);
+      }catch(e){
+        status.textContent='Could not connect: '+(e&&e.message?e.message:String(e));
+        localStorage.removeItem(BRIDGE_CONFIG_KEY);window.dashboardBridgeActive=false;clearBridgeFrame();
+      }
+    };
+  }
+
+  if(new URLSearchParams(location.search).get('bridgeSetup')==='1'){
+    setTimeout(showBridgeSetup,0);
+  }
 
   if(new URLSearchParams(location.search).get('setup')==='1'){
     localStorage.removeItem(CONFIG_KEY);
