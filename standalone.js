@@ -8,6 +8,7 @@
   const LAST_SYNC_KEY='pdLastSyncAtV1';
   const LAST_DAY_KEY='pdLastDayKeyV1';
   const BRIDGE_CONFIG_KEY='pdBridgeConfigV1';
+  const DEFAULT_BRIDGE_URL='https://script.google.com/macros/s/AKfycbyEuDlaExgHOHgpj_dfRkJnoDLD-z_ijobrcTiou3_9dhFLiQYzo3nIAq-u04aVpWiy/exec';
   const SCOPES=[
     'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/spreadsheets',
@@ -46,7 +47,7 @@
     bridgeFrame=null;bridgeReadyPromise=null;
   }
   function saveBridgeConfig(url,key){
-    const cfg={url:normalizeBridgeUrl(url),key:String(key||'').trim()};
+    const cfg={url:normalizeBridgeUrl(url||DEFAULT_BRIDGE_URL),key:String(key||'').trim()};
     if(!cfg.url||!/\/exec$/.test(cfg.url))throw new Error('Use the Apps Script Web app URL ending in /exec.');
     if(cfg.key.length<12)throw new Error('Dashboard key looks too short.');
     localStorage.setItem(BRIDGE_CONFIG_KEY,JSON.stringify(cfg));
@@ -946,13 +947,13 @@
   };
 
   function showBridgeSetup(){
-    const existing=savedBridgeConfig()||{};
+    const existing=savedBridgeConfig()||{url:DEFAULT_BRIDGE_URL,key:''};
     showCard(`
       <div class="standalone-kicker">PRIVATE DASHBOARD // BRIDGE</div>
       <h1>Connect dashboard backend</h1>
       <p>This is a one-time setup for this device. The private key stays in this browser and is never saved to GitHub.</p>
       <label style="display:block;text-align:left;margin:14px 0 5px">Apps Script Web app URL</label>
-      <input id="bridgeUrl" autocomplete="off" spellcheck="false" value="${existing.url||''}" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%;box-sizing:border-box;padding:12px">
+      <input id="bridgeUrl" autocomplete="off" spellcheck="false" value="${existing.url||DEFAULT_BRIDGE_URL}" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%;box-sizing:border-box;padding:12px" readonly>
       <label style="display:block;text-align:left;margin:14px 0 5px">Private dashboard key</label>
       <input id="bridgeKey" type="password" autocomplete="off" spellcheck="false" value="" placeholder="EMBED_KEY from Apps Script properties" style="width:100%;box-sizing:border-box;padding:12px">
       <button id="bridgeSave" class="standalone-primary" style="margin-top:16px">TEST & SAVE</button>
