@@ -3,7 +3,8 @@ const STATE = {
   collectionTab:(localStorage.getItem('dashboardCollectionTab')||'wishlist'), collectionCache:{},
   pokemonGen:'1', pokemonFilter:'all', wishlistCategory:'all', onePiecePage:'all',
   modalType:null, editingTaskId:null, habitDashboard:null, taskDashboard:null, taskFilter:'all',
-  bootstrapFetchedAt:0, healthRefreshPromise:null, lastDayKey:null, bootstrapRefreshPromise:null, habitLivePollBusy:false
+  bootstrapFetchedAt:0, healthRefreshPromise:null, lastDayKey:null, bootstrapRefreshPromise:null, habitLivePollBusy:false,
+  habitPending:{}, habitWriteChains:{}
 };
 const GEN_COLORS={1:'#8E3E42',2:'#A8642A',3:'#A88D3E',4:'#4E725C',5:'#536979',6:'#6E547A',7:'#8A526C',8:'#79634F',9:'#73777C'};
 const RAFT_CONFIG={
@@ -153,6 +154,7 @@ setInterval(()=>{
 
 async function refreshLiveHabits(){
   if(!window.dashboardBridgeActive||document.visibilityState!=='visible'||STATE.habitLivePollBusy||!STATE.bootstrap)return;
+  if(Object.keys(STATE.habitPending||{}).length)return;
   STATE.habitLivePollBusy=true;
   try{
     const habits=await server('getLiveHabits');
@@ -207,7 +209,50 @@ function habitsPanel(habits){
   const body=habits.length?`<div class="panel-body"><div class="habit-grid">${habits.map((h,i)=>`<div class="habit"><div class="habit-name">${esc(h.name)}</div><button class="toggle ${h.done?'on':''}" data-habit="${i}" title="${h.done?'Undo today':'Complete today'}"></button></div>`).join('')}</div></div>`:`<div class="empty">NO HABITS AVAILABLE</div>`;
   return panel('HABITS','習慣',body,{right:`<button class="panel-link" data-open-route="habits">13 WEEK TRACKER →</button>`});
 }
-async function toggleHabitUI(index){const h=STATE.bootstrap.habits[Number(index)];if(!h)return;try{const res=await server('toggleHabit',{cardId:h.cardId,habitId:h.habitId,logId:h.logId});h.done=res.done;h.logId=res.logId;STATE.habitDashboard=null;renderHome()}catch(e){alert(e.message)}}
+async function toggleHabitUI(index){
+  const h=STATE.bootstrap.habits[Number(index)];
+  if(!h)return;
+
+  const cardId=String(h.cardId||'');
+  const previous={done:Boolean(h.done),logId:h.logId||null};
+  const desiredDone=!previous.done;
+  const seq=Number(STATE.habitPending[cardId]||0)+1;
+
+  STATE.habitPending[cardId]=seq;
+  h.done=desiredDone;
+  if(!desiredDone)h.logId=null;
+  STATE.habitDashboard=null;
+
+  // Make the button respond immediately; server confirmation happens in the background.
+  if(STATE.route==='home')renderHome();
+
+  const prior=STATE.habitWriteChains[cardId]||Promise.resolve();
+  const sync=prior.catch(()=>{}).then(()=>server('setHabitState',{
+    cardId:h.cardId,
+    habitId:h.habitId,
+    desiredDone
+  }));
+  STATE.habitWriteChains[cardId]=sync;
+
+  try{
+    const res=await sync;
+    if(STATE.habitPending[cardId]!==seq)return;
+    delete STATE.habitPending[cardId];
+    h.done=Boolean(res&&res.done);
+    h.logId=res&&res.logId||null;
+    if(h.done!==desiredDone&&STATE.route==='home')renderHome();
+  }catch(e){
+    if(STATE.habitPending[cardId]===seq){
+      delete STATE.habitPending[cardId];
+      h.done=previous.done;
+      h.logId=previous.logId;
+      if(STATE.route==='home')renderHome();
+      alert(e.message);
+    }
+  }finally{
+    if(STATE.habitWriteChains[cardId]===sync)delete STATE.habitWriteChains[cardId];
+  }
+}
 function focusPanel(tasks){const n=settingNum('Focus Count',5);const show=tasks.slice(0,n);const body=show.length?`<div class="panel-body task-list">${show.map((t,i)=>taskRow(t,i)).join('')}</div>`:`<div class="empty">FOCUS QUEUE CLEAR</div>`;return panel('FOCUS','優先',body,{right:`<div class="panel-sub">${show.length} ACTIVE</div>`})}
 function taskRow(t,i){
   const due=t.due?new Date(t.due+'T12:00:00'):null,overdue=due&&due<startDay(new Date())&&!t.done;
