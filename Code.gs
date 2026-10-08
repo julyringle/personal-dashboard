@@ -929,28 +929,59 @@ function getHabitDashboardDataSheet_() {
 function toggleHabitSheet_(payload) {
   if (!payload || !payload.cardId) throw new Error('Habit identity missing.');
   const ss = dashboardSpreadsheet_(), sh = ss.getSheetByName('HabitHistory');
+  const today = Utilities.formatDate(new Date(), APP.TZ, 'yyyy-MM-dd');
+  const values = sh.getDataRange().getValues();
+
   if (payload.logId) {
-    const values = sh.getDataRange().getValues();
+    const rowsToDelete = [];
     for (let i=1;i<values.length;i++) {
-      if (String(values[i][0]) === String(payload.logId)) {
-        sh.deleteRow(i+1);
-        return {done:false,logId:null};
+      const rowDate = Utilities.formatDate(new Date(values[i][1]), APP.TZ, 'yyyy-MM-dd');
+      if (String(values[i][0]) === String(payload.logId) ||
+          (rowDate === today && String(values[i][2]) === String(payload.cardId))) {
+        rowsToDelete.push(i + 1);
       }
     }
+    rowsToDelete.sort(function(a,b){ return b-a; }).forEach(function(row){ sh.deleteRow(row); });
     return {done:false,logId:null};
   }
+
+  for (let i=1;i<values.length;i++) {
+    const rowDate = Utilities.formatDate(new Date(values[i][1]), APP.TZ, 'yyyy-MM-dd');
+    if (rowDate === today && String(values[i][2]) === String(payload.cardId)) {
+      return {done:true,logId:String(values[i][0]||'')};
+    }
+  }
+
   const habits = sheetObjects_('Habits');
   const h = habits.find(function(r){ return String(r['Card ID']) === String(payload.cardId); });
   if (!h) throw new Error('Habit not found.');
   const id = Utilities.getUuid();
   appendTableObject_('HabitHistory',{
     'ID':id,
-    'Date':Utilities.formatDate(new Date(),APP.TZ,'yyyy-MM-dd'),
+    'Date':today,
     'Habit Card ID':String(h['Card ID']||''),
     'Habit ID':String(h['Habit ID']||''),
     'Habit Name':String(h['Name']||'')
   });
   return {done:true,logId:id};
+}
+
+function setHabitState(payload) {
+  if (!payload || !payload.cardId) throw new Error('Habit identity missing.');
+  const ss = dashboardSpreadsheet_(), sh = ss.getSheetByName('HabitHistory');
+  const today = Utilities.formatDate(new Date(), APP.TZ, 'yyyy-MM-dd');
+  const values = sh.getDataRange().getValues();
+  const matching = [];
+  for (let i=1;i<values.length;i++) {
+    const rowDate = Utilities.formatDate(new Date(values[i][1]), APP.TZ, 'yyyy-MM-dd');
+    if (rowDate === today && String(values[i][2]) === String(payload.cardId)) matching.push(i + 1);
+  }
+  if (payload.desiredDone) {
+    if (matching.length) return {done:true,logId:String(values[matching[0]-1][0]||'')};
+    return toggleHabitSheet_({cardId:payload.cardId,habitId:payload.habitId,logId:null});
+  }
+  matching.sort(function(a,b){ return b-a; }).forEach(function(row){ sh.deleteRow(row); });
+  return {done:false,logId:null};
 }
 
 function createQuickItemSheet_(type, payload) {
