@@ -26,7 +26,11 @@
   function savedBridgeConfig(){
     try{
       const x=JSON.parse(localStorage.getItem(BRIDGE_CONFIG_KEY)||'null');
-      if(x&&x.url&&x.key)return x;
+      if(x&&x.key){
+        const migrated={url:DEFAULT_BRIDGE_URL,key:String(x.key)};
+        if(x.url!==DEFAULT_BRIDGE_URL)localStorage.setItem(BRIDGE_CONFIG_KEY,JSON.stringify(migrated));
+        return migrated;
+      }
     }catch(e){}
     return null;
   }
