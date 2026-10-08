@@ -1,4 +1,4 @@
-const CACHE='personal-dashboard-shell-v8';
+const CACHE='personal-dashboard-shell-v9';
 const SHELL=[
   './',
   './index.html',
@@ -8,8 +8,8 @@ const SHELL=[
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@1567cb986cf637e80f8d13b933866ae7b24dc74a/page-backgrounds.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@01ea40e3eb367dfa03f3d4150f05fa9e79bebaee/section-backgrounds.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@0c9950df33d55ab6b7786e7f4a6a1909913ff152/standalone.css',
-  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@849f25907ea9dfad7e0eb5867480f7f686d87c37/standalone.js',
-  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@cd5122becff5e0a9fb7bd1440c85e6e99bb53416/app.js'
+  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@ab99cc49827d9519f0a80bdac5be79e1c00b230f/standalone.js',
+  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@1b21e950fca495689b42326f90dac77e6bf45cf1/app.js'
 ];
 
 self.addEventListener('install',event=>{
