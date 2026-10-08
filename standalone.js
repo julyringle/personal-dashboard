@@ -58,6 +58,8 @@
   function bridgeMessageHandler(ev){
     if(!bridgeFrame)return;
     const m=ev.data||{};
+    const trustedOrigin=ev.origin==='https://script.google.com'||/https:\/\/[^/]+-script\.googleusercontent\.com$/.test(ev.origin||'');
+    if(!trustedOrigin)return;
     if(m.type==='pd-bridge-ready'){
       bridgePeer=ev.source;
       bridgePeerOrigin=ev.origin||'*';
