@@ -6,6 +6,7 @@
   const DASHBOARD_SHEET_ID='1YO8y-6BI_9caO1hOmU5vSF8xQzZFId6q6Pj8gJSGZfg';
   const OFFLINE_DB='pdOfflineV1';
   const LAST_SYNC_KEY='pdLastSyncAtV1';
+  const LAST_DAY_KEY='pdLastDayKeyV1';
   const SCOPES=[
     'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/spreadsheets',
@@ -65,41 +66,72 @@
     localStorage.setItem(CONFIG_KEY,JSON.stringify(cfg));
     return Promise.resolve(cfg);
   }
-  async function requestToken(cfg){
+  function saveTokenResponse(resp){
+    if(!resp||resp.error)throw new Error((resp&&resp.error_description)||(resp&&resp.error)||'Google authorization failed.');
+    const token={accessToken:resp.access_token,expiresAt:Date.now()+(Number(resp.expires_in||3600)*1000)};
+    localStorage.setItem(TOKEN_KEY,JSON.stringify(token));
+    hideGate();
+    return token;
+  }
+  async function requestTokenSilent(cfg){
+    await waitForGIS();
+    return new Promise((resolve,reject)=>{
+      let settled=false;
+      const finish=(fn,value)=>{if(settled)return;settled=true;clearTimeout(timer);fn(value)};
+      const client=google.accounts.oauth2.initTokenClient({
+        client_id:cfg.clientId,
+        scope:SCOPES,
+        callback:(resp)=>{
+          try{
+            if(resp&&resp.error)return finish(reject,new Error(resp.error_description||resp.error));
+            finish(resolve,saveTokenResponse(resp));
+          }catch(e){finish(reject,e)}
+        },
+        error_callback:(err)=>finish(reject,new Error(err&&err.message?err.message:'Silent Google authorization was unavailable.'))
+      });
+      const timer=setTimeout(()=>finish(reject,new Error('Silent Google authorization timed out.')),7000);
+      try{client.requestAccessToken({prompt:''})}catch(e){finish(reject,e)}
+    });
+  }
+  async function requestTokenInteractive(cfg){
     await waitForGIS();
     return new Promise((resolve,reject)=>{
       showCard(`
         <div class="standalone-kicker">PRIVATE DASHBOARD // 認証</div>
-        <h1>Sign in to continue</h1>
-        <p>Google authentication protects your Calendar, Sheets, habits, health, school, and project data.</p>
-        <button id="standaloneGoogleSignIn" class="standalone-primary">SIGN IN WITH GOOGLE</button>
-        <div class="standalone-note">Only the Google account authorized for the Apps Script API executable can load the dashboard.</div>
+        <h1>Reconnect Google</h1>
+        <p>Your saved dashboard can still open, but live Calendar and Sheets data need Google access.</p>
+        <button id="standaloneGoogleSignIn" class="standalone-primary">RECONNECT GOOGLE</button>
+        <div class="standalone-note">This should only appear when Google cannot silently renew access.</div>
       `);
       document.getElementById('standaloneGoogleSignIn').onclick=()=>{
+        let settled=false;
+        const finish=(fn,value)=>{if(settled)return;settled=true;fn(value)};
         const client=google.accounts.oauth2.initTokenClient({
           client_id:cfg.clientId,
           scope:SCOPES,
           callback:(resp)=>{
-            if(resp.error){reject(new Error(resp.error_description||resp.error));return}
-            const token={accessToken:resp.access_token,expiresAt:Date.now()+(Number(resp.expires_in||3600)*1000)};
-            localStorage.setItem(TOKEN_KEY,JSON.stringify(token));
-            hideGate();
-            resolve(token);
+            try{
+              if(resp&&resp.error)return finish(reject,new Error(resp.error_description||resp.error));
+              finish(resolve,saveTokenResponse(resp));
+            }catch(e){finish(reject,e)}
           },
-          error_callback:(err)=>reject(new Error(err&&err.message?err.message:'Google sign-in was cancelled.'))
+          error_callback:(err)=>finish(reject,new Error(err&&err.message?err.message:'Google sign-in was cancelled.'))
         });
-        client.requestAccessToken({prompt:''});
+        try{client.requestAccessToken({prompt:''})}catch(e){finish(reject,e)}
       };
     });
   }
-  async function ensureToken(cfg,force){
-    if(!force){
-      const existing=savedToken();
-      if(existing) return existing;
+  async function ensureToken(cfg,interactive){
+    const existing=savedToken();
+    if(existing)return existing;
+    if(authPromise){
+      try{return await authPromise}catch(e){if(!interactive)throw e}
     }
-    if(authPromise&&!force) return authPromise;
-    authPromise=requestToken(cfg).finally(()=>{authPromise=null});
-    return authPromise;
+    authPromise=requestTokenSilent(cfg).finally(()=>{authPromise=null});
+    try{return await authPromise}catch(silentErr){
+      if(!interactive)throw silentErr;
+      return requestTokenInteractive(cfg);
+    }
   }
   async function execute(cfg,token,method,args){
     const response=await fetch('https://script.googleapis.com/v1/scripts/'+encodeURIComponent(cfg.scriptId)+':run',{
@@ -431,6 +463,38 @@
     }).catch(()=>window.dispatchEvent(new CustomEvent('dashboard-sync-state',{detail:state})));
   }
   function cloneValue(v){return v==null?v:JSON.parse(JSON.stringify(v))}
+  function blankHealthToday(day){
+    return {date:day,weight:null,sleepHours:null,sleepScore:null,hrv:null,restingHR:null,steps:null,
+      protein:null,bodyBattery:null,energy:null,stress:null,soreness:null,mood:'',calories:null,carbs:null,fat:null};
+  }
+  function normalizeCachedValue(method,record){
+    const value=cloneValue(record&&record.value);
+    if(!record||!value)return value;
+    const today=dateKeyCentral(new Date());
+    const recordDay=record.at?dateKeyCentral(new Date(record.at)):'';
+    if(recordDay===today)return value;
+    if(method==='getBootstrapData'){
+      if(Array.isArray(value.habits))value.habits=value.habits.map(h=>({...h,done:false,logId:null}));
+      if(value.health)value.health={...value.health,today:blankHealthToday(today)};
+      if(value.calendar){
+        const now=Date.now(),ws=Date.parse(value.calendar.weekStart||''),we=Date.parse(value.calendar.weekEnd||'');
+        if(!Number.isFinite(ws)||!Number.isFinite(we)||now<ws||now>=we)value.calendar=null;
+      }
+    }
+    return value;
+  }
+  async function rollCachedDayForward(){
+    const today=dateKeyCentral(new Date());
+    const previous=localStorage.getItem(LAST_DAY_KEY)||'';
+    if(previous===today)return false;
+    localStorage.setItem(LAST_DAY_KEY,today);
+    const rec=await readCached('getBootstrapData',[]);
+    if(rec&&rec.value){
+      const value=normalizeCachedValue('getBootstrapData',rec);
+      await dbPut('cache',{...rec,value,at:Date.now()});
+    }
+    return true;
+  }
   function patchTaskTree(value,id,mode,payload){
     if(Array.isArray(value)){
       const out=[];
@@ -595,25 +659,61 @@
     return execute(cfg,token,method,args);
   }
 
+  async function refreshPrimaryCaches(cfg,token){
+    await flushQueue(cfg,token);
+    const boot=await dispatch(cfg,token,'getBootstrapData',[]);
+    await writeCached('getBootstrapData',[],boot);
+    try{
+      const tasks=await dispatch(cfg,token,'getTaskDashboardData',[]);
+      await writeCached('getTaskDashboardData',[],tasks);
+    }catch(e){}
+    try{
+      const habits=await dispatch(cfg,token,'getHabitDashboardData',[]);
+      await writeCached('getHabitDashboardData',[],habits);
+    }catch(e){}
+    setLastSync();
+    localStorage.setItem(LAST_DAY_KEY,dateKeyCentral(new Date()));
+    emitState({fromCache:false,needsAuth:false});
+    window.dispatchEvent(new CustomEvent('dashboard-data-refreshed',{detail:{bootstrap:cloneValue(boot)}}));
+    return boot;
+  }
+
+  async function trySilentRefresh(){
+    if(!navigator.onLine)return false;
+    const cfg=await ensureConfig();
+    let token=savedToken();
+    if(!token){
+      try{token=await ensureToken(cfg,false)}catch(e){emitState({needsAuth:true,fromCache:true});return false}
+    }
+    try{await refreshPrimaryCaches(cfg,token);return true}
+    catch(e){
+      if(e&&e.auth)localStorage.removeItem(TOKEN_KEY);
+      emitState({needsAuth:!savedToken(),fromCache:true});
+      return false;
+    }
+  }
+
   window.dashboardRemoteRun=async function(method,args){
     args=args||[];
     const cached=CACHEABLE.has(method)?await readCached(method,args):null;
     if(!navigator.onLine){
       if(isWrite(method,args))return offlineWrite(method,args);
-      if(cached){emitState({fromCache:true,needsAuth:false});return cloneValue(cached.value)}
+      if(cached){emitState({fromCache:true,needsAuth:false});return normalizeCachedValue(method,cached)}
       throw new Error('OFFLINE // No saved copy of this data yet.');
     }
 
     const cfg=await ensureConfig();
     let token=savedToken();
-
-    if(!token&&CACHEABLE.has(method)&&cached){
-      emitState({fromCache:true,needsAuth:true});
-      return cloneValue(cached.value);
+    if(!token){
+      try{token=await ensureToken(cfg,false)}
+      catch(silentErr){
+        if(isWrite(method,args))token=await ensureToken(cfg,true);
+        else if(cached){emitState({fromCache:true,needsAuth:true});return normalizeCachedValue(method,cached)}
+        else token=await ensureToken(cfg,true);
+      }
     }
 
     try{
-      if(!token)token=await ensureToken(cfg,false);
       await flushQueue(cfg,token);
       const result=await dispatch(cfg,token,method,args);
       if(CACHEABLE.has(method))await writeCached(method,args,result);
@@ -621,52 +721,70 @@
         getTaskDashboardDataDirect(token).then(v=>writeCached('getTaskDashboardData',[],v)).catch(()=>{});
         execute(cfg,token,'getHabitDashboardData',[]).then(v=>writeCached('getHabitDashboardData',[],v)).catch(()=>{});
       }
-      setLastSync();emitState({fromCache:false,needsAuth:false});
+      setLastSync();localStorage.setItem(LAST_DAY_KEY,dateKeyCentral(new Date()));emitState({fromCache:false,needsAuth:false});
       return result;
     }catch(err){
-      if(err.auth){
+      if(err&&err.auth){
         localStorage.removeItem(TOKEN_KEY);
-        if(CACHEABLE.has(method)&&cached){emitState({fromCache:true,needsAuth:true});return cloneValue(cached.value)}
-        token=await ensureToken(cfg,true);
-        await flushQueue(cfg,token);
-        const result=await dispatch(cfg,token,method,args);
-        if(CACHEABLE.has(method))await writeCached(method,args,result);
-        if(method==='getBootstrapData'){
-          getTaskDashboardDataDirect(token).then(v=>writeCached('getTaskDashboardData',[],v)).catch(()=>{});
-          execute(cfg,token,'getHabitDashboardData',[]).then(v=>writeCached('getHabitDashboardData',[],v)).catch(()=>{});
+        try{
+          token=await ensureToken(cfg,false);
+          await flushQueue(cfg,token);
+          const result=await dispatch(cfg,token,method,args);
+          if(CACHEABLE.has(method))await writeCached(method,args,result);
+          setLastSync();localStorage.setItem(LAST_DAY_KEY,dateKeyCentral(new Date()));emitState({fromCache:false,needsAuth:false});
+          return result;
+        }catch(refreshErr){
+          if(isWrite(method,args))token=await ensureToken(cfg,true);
+          else if(CACHEABLE.has(method)&&cached){emitState({fromCache:true,needsAuth:true});return normalizeCachedValue(method,cached)}
+          else token=await ensureToken(cfg,true);
+          await flushQueue(cfg,token);
+          const result=await dispatch(cfg,token,method,args);
+          if(CACHEABLE.has(method))await writeCached(method,args,result);
+          setLastSync();localStorage.setItem(LAST_DAY_KEY,dateKeyCentral(new Date()));emitState({fromCache:false,needsAuth:false});
+          return result;
         }
-        setLastSync();emitState({fromCache:false,needsAuth:false});
-        return result;
       }
       const networkish=!navigator.onLine||/failed to fetch|network|load failed|offline/i.test(String(err&&err.message||err));
       if(networkish&&isWrite(method,args))return offlineWrite(method,args);
-      if(CACHEABLE.has(method)&&cached){emitState({fromCache:true});return cloneValue(cached.value)}
+      if(CACHEABLE.has(method)&&cached){emitState({fromCache:true});return normalizeCachedValue(method,cached)}
       throw err;
     }
   };
-
 
   window.forceDashboardSync=async function(){
     if(!navigator.onLine){emitState({fromCache:true,needsAuth:false});return false}
     const cfg=await ensureConfig();
     let token=savedToken();
-    if(!token)token=await ensureToken(cfg,true);
-    await flushQueue(cfg,token);
-    const boot=await dispatch(cfg,token,'getBootstrapData',[]);
-    await writeCached('getBootstrapData',[],boot);
-    const tasks=await dispatch(cfg,token,'getTaskDashboardData',[]);
-    await writeCached('getTaskDashboardData',[],tasks);
-    try{const habits=await dispatch(cfg,token,'getHabitDashboardData',[]);await writeCached('getHabitDashboardData',[],habits)}catch(e){}
-    setLastSync();emitState({fromCache:false,needsAuth:false});
-    location.reload();
+    if(!token){
+      try{token=await ensureToken(cfg,false)}
+      catch(e){token=await ensureToken(cfg,true)}
+    }
+    await refreshPrimaryCaches(cfg,token);
     return true;
   };
-  window.addEventListener('online',async()=>{
-    emitState();
-    const token=savedToken();if(!token)return;
-    try{const cfg=await ensureConfig();await flushQueue(cfg,token)}catch(e){if(e&&e.auth)localStorage.removeItem(TOKEN_KEY)}
-  });
+  window.dashboardAutoSync=trySilentRefresh;
+
+  window.addEventListener('online',()=>{emitState();trySilentRefresh().catch(()=>{})});
   window.addEventListener('offline',()=>emitState({fromCache:true,needsAuth:false}));
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState!=='visible')return;
+    const last=Number(localStorage.getItem(LAST_SYNC_KEY)||0);
+    const dayChanged=(localStorage.getItem(LAST_DAY_KEY)||'')!==dateKeyCentral(new Date());
+    rollCachedDayForward().then(changed=>{
+      if(changed)window.dispatchEvent(new CustomEvent('dashboard-day-changed',{detail:{day:dateKeyCentral(new Date())}}));
+      if(dayChanged||Date.now()-last>120000)trySilentRefresh().catch(()=>{});
+    }).catch(()=>{});
+  });
+  setInterval(()=>{
+    rollCachedDayForward().then(changed=>{
+      if(!changed)return;
+      window.dispatchEvent(new CustomEvent('dashboard-day-changed',{detail:{day:dateKeyCentral(new Date())}}));
+      trySilentRefresh().catch(()=>{});
+    }).catch(()=>{});
+  },60000);
+  rollCachedDayForward().then(changed=>{
+    if(changed)window.dispatchEvent(new CustomEvent('dashboard-day-changed',{detail:{day:dateKeyCentral(new Date())}}));
+  }).catch(()=>{});
   emitState();
 
   window.resetDashboardConnection=function(){
