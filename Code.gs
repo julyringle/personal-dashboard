@@ -63,17 +63,17 @@ function getDashboardBridgeHtml_() {
         'var r=google.script.run.withSuccessHandler(ok).withFailureHandler(fail);' +
         'switch(m.method){' +
           'case "getBootstrapData":r.getBootstrapData();break;' +
-          'case "getCalendarWeek":r.getCalendarWeek.apply(r,args);break;' +
+          'case "getCalendarWeek":r.getCalendarWeek(args[0]);break;' +
           'case "getHabitDashboardData":r.getHabitDashboardData();break;' +
           'case "getTaskDashboardData":r.getTaskDashboardData();break;' +
-          'case "getCollectionData":r.getCollectionData.apply(r,args);break;' +
+          'case "getCollectionData":r.getCollectionData(args[0],args[1]);break;' +
           'case "getLiveHabits":r.getLiveHabits();break;' +
-          'case "toggleHabit":r.toggleHabit.apply(r,args);break;' +
-          'case "setHabitState":r.setHabitState.apply(r,args);break;' +
-          'case "toggleTask":r.toggleTask.apply(r,args);break;' +
-          'case "updateTask":r.updateTask.apply(r,args);break;' +
-          'case "deleteTask":r.deleteTask.apply(r,args);break;' +
-          'case "createQuickItem":r.createQuickItem.apply(r,args);break;' +
+          'case "toggleHabit":r.toggleHabit(args[0]);break;' +
+          'case "setHabitState":r.setHabitState(args[0]);break;' +
+          'case "toggleTask":r.toggleTask(args[0]);break;' +
+          'case "updateTask":r.updateTask(args[0],args[1]);break;' +
+          'case "deleteTask":r.deleteTask(args[0]);break;' +
+          'case "createQuickItem":r.createQuickItem(args[0],args[1]);break;' +
           'default:fail(new Error("Method not allowed"));' +
         '}' +
       '}catch(ex){fail(ex);}' +
@@ -158,6 +158,7 @@ function getBootstrapData() {
   try { out.focus = getFocusTasks_(); } catch (e) { errors.push('focus: ' + e.message); }
   try { out.habits = getHabits_(); } catch (e) { errors.push('habits: ' + e.message); }
   try { out.health = getHealthSummary_(); } catch (e) { errors.push('health: ' + e.message); }
+  try { out.health = mergeNutritionTodayIntoHealth_(out.health, out.settings); } catch (e) { errors.push('nutrition: ' + e.message); }
   try { out.school = getSchoolSummary_(); } catch (e) { errors.push('school: ' + e.message); }
   try { out.projects = getProjectsSummary_(); } catch (e) { errors.push('projects: ' + e.message); }
   try { out.projectTasks = getProjectTasks_(); } catch (e) { errors.push('project tasks: ' + e.message); }
@@ -886,6 +887,68 @@ function getHealthSummarySheet_() {
     weightTrend30d: latestWeight && oldestWeight ? round1_(latestWeight.weight - oldestWeight.weight) : null,
     series: data.slice().reverse()
   };
+}
+
+function getNutritionTodayFromSettings_(settings) {
+  settings = settings || [];
+  const row = settings.find(function(x) { return String(x.setting || '') === 'Nutrition Sheet ID'; });
+  const sourceId = row && row.value ? String(row.value) : '';
+  if (!sourceId) return null;
+
+  const ss = SpreadsheetApp.openById(sourceId);
+  const sh = ss.getSheetByName('Nutrition Daily');
+  if (!sh || sh.getLastRow() < 2) return null;
+
+  const values = sh.getRange(1, 1, sh.getLastRow(), Math.min(sh.getLastColumn(), 17)).getValues();
+  const headers = values[0].map(String);
+  const idx = {};
+  headers.forEach(function(h, i) { idx[h] = i; });
+  const today = Utilities.formatDate(new Date(), APP.TZ, 'yyyy-MM-dd');
+
+  for (let i = 1; i < values.length; i++) {
+    if (dateKeySheet_(values[i][idx['Date']]) !== today) continue;
+    return {
+      date: today,
+      calories: numOrNull_(values[i][idx['Energy (kcal)']]),
+      protein: numOrNull_(values[i][idx['Protein (g)']]),
+      carbs: numOrNull_(values[i][idx['Carbs (g)']]),
+      fat: numOrNull_(values[i][idx['Fat (g)']])
+    };
+  }
+  return null;
+}
+
+function mergeNutritionTodayIntoHealth_(health, settings) {
+  const nutrition = getNutritionTodayFromSettings_(settings);
+  if (!nutrition) return health;
+  if (!health) {
+    const blank = {
+      date:nutrition.date,weight:null,sleepHours:null,sleepScore:null,hrv:null,restingHR:null,steps:null,
+      protein:null,calories:null,carbs:null,fat:null,bodyBattery:null,energy:null,stress:null,soreness:null,mood:''
+    };
+    const today = Object.assign({}, blank, nutrition);
+    return {latest:today,today:today,weightTrend30d:null,series:[today]};
+  }
+
+  health.today = Object.assign({}, health.today || {date:nutrition.date}, nutrition);
+  const series = (health.series || []).slice();
+  let found = false;
+  for (let i = 0; i < series.length; i++) {
+    if (String(series[i].date) !== nutrition.date) continue;
+    series[i] = Object.assign({}, series[i], nutrition);
+    found = true;
+    break;
+  }
+  if (!found) {
+    series.push({
+      date:nutrition.date,weight:null,sleepHours:null,sleepScore:null,hrv:null,restingHR:null,steps:null,
+      protein:nutrition.protein,calories:nutrition.calories,carbs:nutrition.carbs,fat:nutrition.fat,
+      bodyBattery:null,energy:null,stress:null,soreness:null,mood:''
+    });
+  }
+  series.sort(function(a,b){ return String(a.date).localeCompare(String(b.date)); });
+  health.series = series;
+  return health;
 }
 
 function getHabitsSheet_() {
