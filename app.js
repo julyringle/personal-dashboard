@@ -3,7 +3,7 @@ const STATE = {
   collectionTab:(localStorage.getItem('dashboardCollectionTab')||'wishlist'), collectionCache:{},
   pokemonGen:'1', pokemonFilter:'all', wishlistCategory:'all', onePiecePage:'all',
   modalType:null, editingTaskId:null, habitDashboard:null, taskDashboard:null, taskFilter:'all',
-  bootstrapFetchedAt:0, healthRefreshPromise:null, lastDayKey:null, bootstrapRefreshPromise:null
+  bootstrapFetchedAt:0, healthRefreshPromise:null, lastDayKey:null, bootstrapRefreshPromise:null, habitLivePollBusy:false
 };
 const GEN_COLORS={1:'#8E3E42',2:'#A8642A',3:'#A88D3E',4:'#4E725C',5:'#536979',6:'#6E547A',7:'#8A526C',8:'#79634F',9:'#73777C'};
 const RAFT_CONFIG={
@@ -150,6 +150,26 @@ setInterval(()=>{
     if(!window.__DASHBOARD_STANDALONE__)refreshBootstrapLive();
   }
 },60000);
+
+async function refreshLiveHabits(){
+  if(!window.dashboardBridgeActive||document.visibilityState!=='visible'||STATE.habitLivePollBusy||!STATE.bootstrap)return;
+  STATE.habitLivePollBusy=true;
+  try{
+    const habits=await server('getLiveHabits');
+    if(!Array.isArray(habits))return;
+    const before=JSON.stringify((STATE.bootstrap.habits||[]).map(h=>[h.cardId,h.done,h.logId]));
+    const after=JSON.stringify(habits.map(h=>[h.cardId,h.done,h.logId]));
+    if(before!==after){
+      STATE.bootstrap.habits=habits;
+      STATE.habitDashboard=null;
+      if(STATE.route==='home')renderHome();
+    }
+  }catch(e){console.warn('Habit live sync failed',e)}
+  finally{STATE.habitLivePollBusy=false}
+}
+setInterval(refreshLiveHabits,15000);
+window.addEventListener('focus',refreshLiveHabits);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshLiveHabits()});
 
 async function init(){
   try{STATE.lastDayKey=localDayKey();STATE.bootstrap=await server('getBootstrapData');STATE.bootstrapFetchedAt=Date.now();applyTheme();updateClock();navigate(STATE.route);if(STATE.bootstrap.errors?.length)console.warn(STATE.bootstrap.errors)}catch(e){document.getElementById('app').innerHTML=`<div class="error">${esc(e.message)}</div>`}
