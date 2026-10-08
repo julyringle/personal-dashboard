@@ -14,7 +14,7 @@
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/script.external_request'
   ].join(' ');
-  let gate=null,configPromise=null,authPromise=null,bridgeFrame=null,bridgeReadyPromise=null,bridgeSeq=0;
+  let gate=null,configPromise=null,authPromise=null,bridgeFrame=null,bridgeReadyPromise=null,bridgePeer=null,bridgePeerOrigin='*',bridgeSeq=0;
   const bridgePending=new Map();
 
   function inAppsScriptHost(){
@@ -44,7 +44,7 @@
     bridgePending.forEach(p=>p.reject(new Error('Dashboard bridge reset.')));
     bridgePending.clear();
     if(bridgeFrame){try{bridgeFrame.remove()}catch(e){}}
-    bridgeFrame=null;bridgeReadyPromise=null;
+    bridgeFrame=null;bridgeReadyPromise=null;bridgePeer=null;bridgePeerOrigin='*';
   }
   function saveBridgeConfig(url,key){
     const cfg={url:normalizeBridgeUrl(url||DEFAULT_BRIDGE_URL),key:String(key||'').trim()};
@@ -56,14 +56,16 @@
     return cfg;
   }
   function bridgeMessageHandler(ev){
-    if(!bridgeFrame||ev.source!==bridgeFrame.contentWindow)return;
+    if(!bridgeFrame)return;
     const m=ev.data||{};
     if(m.type==='pd-bridge-ready'){
+      bridgePeer=ev.source;
+      bridgePeerOrigin=ev.origin||'*';
       if(bridgeFrame.__readyResolve)bridgeFrame.__readyResolve(true);
       bridgeFrame.__readyResolve=null;bridgeFrame.__readyReject=null;
       return;
     }
-    if(m.type!=='pd-bridge-response'||!m.id)return;
+    if(m.type!=='pd-bridge-response'||!m.id||ev.source!==bridgePeer)return;
     const p=bridgePending.get(m.id);if(!p)return;
     bridgePending.delete(m.id);clearTimeout(p.timer);
     if(m.ok)p.resolve(m.result);
@@ -93,8 +95,10 @@
       const id='b'+Date.now().toString(36)+(++bridgeSeq).toString(36);
       const timer=setTimeout(()=>{bridgePending.delete(id);reject(new Error('Dashboard bridge request timed out.'));},20000);
       bridgePending.set(id,{resolve,reject,timer});
-      try{bridgeFrame.contentWindow.postMessage({type:'pd-bridge-request',id,method,args:args||[]},'*')}
-      catch(e){clearTimeout(timer);bridgePending.delete(id);reject(e)}
+      try{
+        if(!bridgePeer)throw new Error('Dashboard bridge is not ready.');
+        bridgePeer.postMessage({type:'pd-bridge-request',id,method,args:args||[]},bridgePeerOrigin||'*');
+      }catch(e){clearTimeout(timer);bridgePending.delete(id);reject(e)}
     });
   }
   window.dashboardBridgeActive=Boolean(savedBridgeConfig());
