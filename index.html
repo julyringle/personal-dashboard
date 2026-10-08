@@ -46,8 +46,8 @@
   const requested=(new URLSearchParams(location.search).get('view')||'home').toLowerCase();
   window.__INITIAL_VIEW__=['home','tasks','habits','health','school','projects','collections'].includes(requested)?requested:'home';
 </script>
-<script src="https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@a165cdc00b92a3917c518173b0b3c679ba0bcb27/standalone.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@feb6751164455064d1007a9e6ba5979943255cf8/app.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@849f25907ea9dfad7e0eb5867480f7f686d87c37/standalone.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@cd5122becff5e0a9fb7bd1440c85e6e99bb53416/app.js"></script>
 <script>
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
