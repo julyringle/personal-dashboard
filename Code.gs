@@ -353,6 +353,72 @@ function garminMergeRecords_(byDate, payload, metrics) {
   });
 }
 
+function garminMergeDailySummaries_(byDate, payload) {
+  const rows = Array.isArray(payload) ? payload : payload && Array.isArray(payload.data) ? payload.data : [];
+  rows.forEach(function(day) {
+    const date = garminRecordDate_(day);
+    if (!date) return;
+    const out = byDate[date] || (byDate[date] = {});
+    const values = {
+      steps: day.movement && day.movement.steps && day.movement.steps.value,
+      restingHR: day.heartRate && day.heartRate.restingValue,
+      stress: day.stress && day.stress.avgLevel,
+      bodyBattery: day.bodyBattery && (
+        day.bodyBattery.maxValue != null ? day.bodyBattery.maxValue : day.bodyBattery.latestValue
+      )
+    };
+    Object.keys(values).forEach(function(metric) {
+      const value = garminNumber_(values[metric]);
+      if (value !== null && isFinite(value) && value >= 0) out[metric] = value;
+    });
+  });
+}
+
+function garminMergeSleepDay_(byDate, payload, date) {
+  const record = payload && (payload.dailySleepDTO || payload.dailySleep || payload.sleepData || payload);
+  if (!record || typeof record !== 'object') return false;
+  const out = byDate[date] || (byDate[date] = {});
+  const hours = garminSleepHours_(record);
+  if (hours !== null && hours >= 0 && hours <= 24) out.sleepHours = hours;
+  const score = garminNumber_(garminFindDeep_(record, ['overallSleepScore','sleepScoreValue']));
+  const overall = record.sleepScores && record.sleepScores.overall;
+  const actualScore = score !== null ? score : garminNumber_(overall && overall.value);
+  if (actualScore !== null && actualScore >= 0 && actualScore <= 100) out.sleepScore = actualScore;
+  if (out.sleepHours === undefined) {
+    const deep = garminNumber_(record.deepSleepSeconds);
+    const light = garminNumber_(record.lightSleepSeconds);
+    const rem = garminNumber_(record.remSleepSeconds);
+    if (deep !== null && light !== null && rem !== null) {
+      out.sleepHours = Math.round((deep + light + rem) / 36) / 100;
+    }
+  }
+  return out.sleepHours !== undefined || out.sleepScore !== undefined;
+}
+
+function garminIsoDateAdd_(dateString, delta) {
+  const d = new Date(String(dateString) + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + delta);
+  return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
+}
+
+function garminFetchChunked_(request, startDate, endDate) {
+  const all = [];
+  let windowStart = startDate;
+  while (windowStart <= endDate) {
+    const maxEnd = garminIsoDateAdd_(windowStart, 27);
+    const windowEnd = maxEnd < endDate ? maxEnd : endDate;
+    const path = request.path.replace(startDate + '/' + endDate, windowStart + '/' + windowEnd);
+    const params = Object.assign({}, request.params);
+    if (params.startDate) params.startDate = windowStart;
+    if (params.endDate) params.endDate = windowEnd;
+    const response = garminApiGet_(path, params, false);
+    if (Array.isArray(response)) all.push.apply(all,response);
+    else if (response && Array.isArray(response.data)) all.push.apply(all,response.data);
+    windowStart = garminIsoDateAdd_(windowEnd, 1);
+  }
+  return all;
+}
+
 function garminRangeDate_(daysBack) {
   const d = new Date();
   d.setDate(d.getDate() - Number(daysBack || 0));
@@ -422,13 +488,32 @@ function syncGarminHealth_() {
     ];
     requests.forEach(function(request) {
       try {
-        const payload = garminApiGet_(request.path, request.params, false);
-        garminMergeRecords_(byDate, payload, request.metrics);
+        const payload = (request.name === 'steps' || request.name === 'stress' || request.name === 'sleep')
+          ? garminFetchChunked_(request, startDate, endDate)
+          : garminApiGet_(request.path, request.params, false);
+        if (request.name === 'daily') garminMergeDailySummaries_(byDate, payload);
+        else if (request.name === 'sleep') {
+          garminMergeRecords_(byDate, payload, request.metrics);
+          garminCollectRecords_(payload, [], {}).forEach(function(record) {
+            const date = garminRecordDate_(record);
+            if (date) garminMergeSleepDay_(byDate, record, date);
+          });
+        } else garminMergeRecords_(byDate, payload, request.metrics);
       } catch (err) {
         warnings.push(request.name + ': ' + String(err && err.message ? err.message : err));
       }
     });
 
+    const needsSleep = Object.keys(byDate).sort().reverse()
+      .filter(function(date) { return byDate[date].sleepHours === undefined; }).slice(0, 14);
+    needsSleep.forEach(function(date) {
+      try {
+        const payload = garminApiGet_('/sleep-service/sleep/dailySleep', { date:date }, false);
+        garminMergeSleepDay_(byDate, payload, date);
+      } catch (err) {
+        warnings.push('sleep ' + date + ': HTTP request failed');
+      }
+    });
     const dates = Object.keys(byDate).sort();
     if (!dates.length) throw new Error('Garmin connected, but no dated health records were returned. ' + warnings.join(' | '));
     const ss = dashboardSpreadsheet_();
@@ -1071,6 +1156,7 @@ function numOrNull_(v) {
 
 function dateKeySheet_(v) {
   if (!v) return '';
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim())) return v.trim();
   const d = v instanceof Date ? v : new Date(v);
   if (isNaN(d)) return String(v).slice(0,10);
   return Utilities.formatDate(d, APP.TZ, 'yyyy-MM-dd');
