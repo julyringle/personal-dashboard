@@ -470,7 +470,7 @@ function syncGarminHealth_() {
         steps:['steps','totalSteps','stepCount']
       }},
       { name:'stress', path:'/usersummary-service/stats/stress/daily/' + startDate + '/' + endDate, params:{}, metrics:{
-        stress:['averageStressLevel','averageStressLevelOfDay','avgStressLevel','stressLevel','averageStress']
+        stress:['overallStressLevel','averageStressLevel','averageStressLevelOfDay','avgStressLevel','stressLevel','averageStress']
       }},
       { name:'sleep', path:'/sleep-service/sleep/dailySleepSummariesByDate', params:{startDate:startDate,endDate:endDate}, metrics:{
         sleepHours:['sleepTimeSeconds','sleepDurationSeconds','totalSleepSeconds','sleepDurationInSeconds','totalSleepDurationSeconds','sleepSeconds','sleepTimeMinutes','sleepDurationMinutes','totalSleepMinutes','sleepHours','sleepDurationHours','totalSleepHours'],
