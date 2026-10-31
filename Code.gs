@@ -400,6 +400,12 @@ function syncGarminHealth_() {
         stress:['averageStressLevel','averageStressLevelOfDay','avgStressLevel','stressLevel'],
         bodyBattery:['bodyBatteryHighestValue','highestBodyBatteryValue','bodyBatteryAtWakeTime']
       }},
+      { name:'steps', path:'/usersummary-service/stats/steps/daily/' + startDate + '/' + endDate, params:{}, metrics:{
+        steps:['steps','totalSteps','stepCount']
+      }},
+      { name:'stress', path:'/usersummary-service/stats/stress/daily/' + startDate + '/' + endDate, params:{}, metrics:{
+        stress:['averageStressLevel','averageStressLevelOfDay','avgStressLevel','stressLevel','averageStress']
+      }},
       { name:'sleep', path:'/sleep-service/sleep/dailySleepSummariesByDate', params:{startDate:startDate,endDate:endDate}, metrics:{
         sleepHours:['sleepTimeSeconds','sleepDurationSeconds','totalSleepSeconds','sleepDurationInSeconds','totalSleepDurationSeconds','sleepSeconds','sleepTimeMinutes','sleepDurationMinutes','totalSleepMinutes','sleepHours','sleepDurationHours','totalSleepHours'],
         sleepScore:['sleepScore','overallSleepScore','sleepScoreValue']
