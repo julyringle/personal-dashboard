@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Cache-Control" content="no-store">
+<title>Garmin Sync Setup · Personal Dashboard</title>
+<style>
+:root{color-scheme:dark;--bg:#090b0d;--panel:#111519;--line:#30383f;--text:#e7e5df;--muted:#8d969f;--red:#81232a;--green:#4da77a}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font:15px/1.55 Inter,system-ui,sans-serif;display:grid;place-items:center;padding:24px}
+main{width:min(680px,100%);background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:30px}
+.kicker{font:700 12px/1.5 ui-monospace,monospace;letter-spacing:.18em;color:#b84b54}
+h1{font-size:30px;line-height:1.15;margin:12px 0}
+p{color:var(--muted);margin:8px 0 20px}
+label{display:block;font:700 12px ui-monospace,monospace;letter-spacing:.08em;color:#aab1b8;margin:18px 0 7px}
+input{width:100%;border:1px solid var(--line);border-radius:10px;background:#080a0c;color:var(--text);padding:14px;font:14px ui-monospace,monospace}
+button{width:100%;border:1px solid #a23a42;background:#7f2028;color:#fff;border-radius:10px;padding:14px 16px;font:800 13px ui-monospace,monospace;letter-spacing:.1em;margin-top:14px;cursor:pointer}
+button.secondary{background:#1a2228;border-color:var(--line);color:var(--text)}
+button:disabled{opacity:.5;cursor:wait}
+.status{margin-top:16px;padding:12px;border:1px solid var(--line);border-radius:10px;color:var(--muted);font:12px/1.6 ui-monospace,monospace;overflow-wrap:anywhere;white-space:pre-wrap}
+.note{font-size:12px;color:var(--muted);margin-top:18px}
+a{color:#d1a0a3}
+hr{border:0;border-top:1px solid var(--line);margin:24px 0}
+@media(max-width:520px){main{padding:22px}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<main>
+  <div class="kicker">PERSONAL DASHBOARD // GARMIN SYNC</div>
+  <h1>Connect Garmin health data</h1>
+  <p>Your Garmin Personal API key is sent directly from this browser to your private Apps Script backend and stored in its Script Properties. It is not saved in GitHub or this page's local storage.</p>
+
+  <label for="garminKey">NEW GARMIN PERSONAL API KEY</label>
+  <input id="garminKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the replacement key here">
+  <button id="saveKey">SAVE KEY & VERIFY GARMIN</button>
+  <div class="status" id="status">Checking this browser's dashboard connection…</div>
+
+  <hr>
+  <button id="syncNow" class="secondary" disabled>RUN FIRST 30-DAY SYNC</button>
+  <div class="note">After a successful setup, the backend will refresh Garmin data every 6 hours. Your food/macros columns are left untouched. Keep this page private and never paste the Garmin key into chat.</div>
+</main>
+<script>
+(function(){
+  const CONFIG_KEY='pdBridgeConfigV1';
+  const statusEl=document.getElementById('status');
+  const saveBtn=document.getElementById('saveKey');
+  const syncBtn=document.getElementById('syncNow');
+  let cfg=null;
+  function readConfig(){
+    try{const x=JSON.parse(localStorage.getItem(CONFIG_KEY)||'null');if(x&&x.key&&x.url)return x;}catch(e){}
+    return null;
+  }
+  function setStatus(s){statusEl.textContent=s;}
+  function jsonp(method,args){
+    return new Promise((resolve,reject)=>{
+      if(!cfg)return reject(new Error('Dashboard is not connected in this browser. Open the dashboard and complete its backend setup first.'));
+      const callback='__pdcbGarmin'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+      const script=document.createElement('script');
+      const timer=setTimeout(()=>{cleanup();reject(new Error('Apps Script did not answer the status check.'));},18000);
+      function cleanup(){clearTimeout(timer);try{delete window[callback];}catch(e){}script.remove();}
+      window[callback]=payload=>{cleanup();if(payload&&payload.ok)resolve(payload.result);else reject(new Error(payload&&payload.error||'Garmin setup request failed.'));};
+      const q=new URLSearchParams({mode:'api',key:cfg.key,method,payload:JSON.stringify(args||[]),callback,_t:String(Date.now())});
+      script.onerror=()=>{cleanup();reject(new Error('Could not load the Apps Script backend.'));};
+      script.src=cfg.url+'?'+q.toString();script.async=true;document.head.appendChild(script);
+    });
+  }
+  async function post(method,args){
+    if(!cfg)throw new Error('Dashboard is not connected in this browser.');
+    const body=new URLSearchParams({mode:'api',key:cfg.key,method,payload:JSON.stringify(args||[])});
+    await fetch(cfg.url,{method:'POST',mode:'no-cors',cache:'no-store',credentials:'omit',redirect:'follow',body});
+  }
+  function displayStatus(s){
+    const lines=[
+      'Garmin key: '+(s.configured?(s.keyStatus==='connected'?'VERIFIED':s.keyStatus.toUpperCase()):'NOT CONFIGURED'),
+      'Last sync: '+(s.lastSyncAt||'Not yet synced'),
+      'Sync status: '+(s.lastSyncStatus||'never'),
+      'Rows updated: '+(s.rowsUpdated||0)+' · Fields updated: '+(s.fieldsUpdated||0),
+      'Automatic schedule: '+(s.triggerStatus||'not installed')
+    ];
+    if(s.lastSyncError)lines.push('Details: '+s.lastSyncError);
+    if(s.triggerError)lines.push('Schedule detail: '+s.triggerError);
+    setStatus(lines.join('\n'));
+    syncBtn.disabled=!(s.configured&&s.keyStatus==='connected');
+  }
+  async function refreshStatus(){const s=await jsonp('getGarminStatus',[]);displayStatus(s);return s;}
+  cfg=readConfig();
+  if(!cfg){setStatus('Dashboard backend key not found in this browser. Open your dashboard on this same browser and connect the backend first.');saveBtn.disabled=true;}
+  else{refreshStatus().catch(e=>setStatus('Connection check failed: '+e.message));}
+
+  saveBtn.addEventListener('click',async()=>{
+    const key=document.getElementById('garminKey').value.trim();
+    if(!key){setStatus('Paste your replacement Garmin Personal API key first.');return;}
+    saveBtn.disabled=true;setStatus('Sending key securely to your private Apps Script backend and verifying with Garmin…');
+    try{
+      await post('setGarminPersonalApiKey',[key]);
+      document.getElementById('garminKey').value='';
+      await new Promise(r=>setTimeout(r,900));
+      const s=await refreshStatus();
+      if(s.keyStatus!=='connected')throw new Error(s.lastSyncError||'Garmin key was not verified.');
+      setStatus('Garmin key verified. Next, run the first sync.\n\n'+statusEl.textContent);
+    }catch(e){setStatus('Could not verify Garmin: '+e.message);}
+    finally{saveBtn.disabled=false;}
+  });
+
+  syncBtn.addEventListener('click',async()=>{
+    syncBtn.disabled=true;syncBtn.textContent='SYNCING…';setStatus('Fetching your recent Garmin health data and updating the Health sheet. This can take a minute…');
+    try{
+      await post('syncGarminHealth',[]);
+      const s=await refreshStatus();
+      if(s.lastSyncStatus==='success'||s.lastSyncStatus==='success_with_warnings'){
+        setStatus('First Garmin sync completed.\n\n'+statusEl.textContent);
+      }else{
+        setStatus('Sync finished with status: '+s.lastSyncStatus+'\n'+(s.lastSyncError||'Check the Apps Script execution log.'));
+      }
+    }catch(e){setStatus('Sync request failed: '+e.message);}
+    finally{syncBtn.disabled=false;syncBtn.textContent='RUN FIRST 30-DAY SYNC';}
+  });
+})();
+</script>
+</body>
+</html>
