@@ -72,6 +72,13 @@ function dashboardApiDispatch_(method, args, allowWrite) {
     case 'getTaskDashboardData': return getTaskDashboardData();
     case 'getCollectionData': return getCollectionData(args[0], args[1]);
     case 'getLiveHabits': return getLiveHabits();
+    case 'getGarminStatus': return getGarminStatus_();
+    case 'setGarminPersonalApiKey':
+      if (!allowWrite) throw new Error('Write method requires POST.');
+      return setGarminPersonalApiKey_(args[0]);
+    case 'syncGarminHealth':
+      if (!allowWrite) throw new Error('Write method requires POST.');
+      return syncGarminHealth_();
     case 'toggleHabit':
       if (!allowWrite) throw new Error('Write method requires POST.');
       return toggleHabit(args[0]);
@@ -136,6 +143,369 @@ function doPost(e) {
     return ContentService.createTextOutput(JSON.stringify({ok:false,error:String(err && err.message ? err.message : err)}))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+
+/* Garmin Connect Personal API integration.
+ * Credentials are stored only in Apps Script Script Properties.
+ * Never log or return the API key or bearer token.
+ */
+const GARMIN_API_BASE_ = 'https://personal.connectapi.garmin.com';
+const GARMIN_TOKEN_PATH_ = '/personalapitoken-service/personal-api/personal-api-key/token';
+
+function setGarminPersonalApiKey_(apiKey) {
+  const key = String(apiKey || '').trim();
+  if (key.length < 30) throw new Error('Garmin key looks incomplete. Paste the complete new Personal API key.');
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('GARMIN_PERSONAL_API_KEY', key);
+  props.deleteProperty('GARMIN_ACCESS_TOKEN');
+  props.deleteProperty('GARMIN_ACCESS_TOKEN_EXPIRES_AT');
+  try {
+    garminGetAccessToken_(true);
+    props.setProperty('GARMIN_KEY_STATUS', 'connected');
+    props.deleteProperty('GARMIN_LAST_ERROR');
+    try { garminEnsureSyncTrigger_(); } catch (triggerError) {
+      props.setProperty('GARMIN_TRIGGER_STATUS', 'authorization_needed');
+      props.setProperty('GARMIN_TRIGGER_ERROR', String(triggerError && triggerError.message ? triggerError.message : triggerError).slice(0, 300));
+    }
+    return getGarminStatus_();
+  } catch (err) {
+    props.setProperty('GARMIN_KEY_STATUS', 'error');
+    props.setProperty('GARMIN_LAST_ERROR', String(err && err.message ? err.message : err).slice(0, 500));
+    props.deleteProperty('GARMIN_ACCESS_TOKEN');
+    props.deleteProperty('GARMIN_ACCESS_TOKEN_EXPIRES_AT');
+    throw new Error('Garmin key could not be verified: ' + String(err && err.message ? err.message : err));
+  }
+}
+
+function garminJwtExpiry_(token) {
+  const parts = String(token || '').split('.');
+  if (parts.length < 2) throw new Error('Garmin token response was not a valid access token.');
+  const bytes = Utilities.base64DecodeWebSafe(parts[1]);
+  const payload = JSON.parse(Utilities.newBlob(bytes).getDataAsString());
+  const exp = Number(payload.exp || 0);
+  if (!exp) throw new Error('Garmin token response did not include an expiration.');
+  return exp * 1000;
+}
+
+function garminGetAccessToken_(forceRefresh) {
+  const props = PropertiesService.getScriptProperties();
+  const key = props.getProperty('GARMIN_PERSONAL_API_KEY');
+  if (!key) throw new Error('Garmin Personal API key has not been configured.');
+  const cached = props.getProperty('GARMIN_ACCESS_TOKEN') || '';
+  const expiresAt = Number(props.getProperty('GARMIN_ACCESS_TOKEN_EXPIRES_AT') || 0);
+  if (!forceRefresh && cached && expiresAt > Date.now() + 60 * 60 * 1000) return cached;
+
+  const response = UrlFetchApp.fetch(GARMIN_API_BASE_ + GARMIN_TOKEN_PATH_, {
+    method: 'post',
+    headers: { Authorization: 'ApiKey ' + key, Accept: '*/*' },
+    muteHttpExceptions: true
+  });
+  const status = response.getResponseCode();
+  const body = String(response.getContentText() || '').trim();
+  if (status < 200 || status >= 300) {
+    throw new Error('Garmin token endpoint returned HTTP ' + status + (body ? ': ' + body.slice(0, 220) : '.'));
+  }
+  const expiry = garminJwtExpiry_(body);
+  props.setProperty('GARMIN_ACCESS_TOKEN', body);
+  props.setProperty('GARMIN_ACCESS_TOKEN_EXPIRES_AT', String(expiry));
+  return body;
+}
+
+function garminApiGet_(path, params, retry) {
+  const token = garminGetAccessToken_(false);
+  const query = Object.keys(params || {}).map(function(k) {
+    return encodeURIComponent(k) + '=' + encodeURIComponent(String(params[k]));
+  }).join('&');
+  const url = GARMIN_API_BASE_ + path + (query ? '?' + query : '');
+  const response = UrlFetchApp.fetch(url, {
+    method: 'get',
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' },
+    muteHttpExceptions: true
+  });
+  const status = response.getResponseCode();
+  const body = String(response.getContentText() || '');
+  if (status === 401 && !retry) {
+    PropertiesService.getScriptProperties().deleteProperty('GARMIN_ACCESS_TOKEN');
+    PropertiesService.getScriptProperties().deleteProperty('GARMIN_ACCESS_TOKEN_EXPIRES_AT');
+    garminGetAccessToken_(true);
+    return garminApiGet_(path, params, true);
+  }
+  if (status < 200 || status >= 300) {
+    throw new Error('Garmin API returned HTTP ' + status + ' for ' + path + (body ? ': ' + body.slice(0, 240) : '.'));
+  }
+  if (!body.trim()) return null;
+  return JSON.parse(body);
+}
+
+function garminCollectRecords_(value, out, seen) {
+  out = out || [];
+  seen = seen || {};
+  if (!value || typeof value !== 'object') return out;
+  if (Array.isArray(value)) {
+    value.forEach(function(item) { garminCollectRecords_(item, out, seen); });
+    return out;
+  }
+  const dateValue = value.calendarDate || value.date || value.measurementDate || value.startDate || value.summaryDate || value.calendarDay;
+  if (dateValue) {
+    const key = String(dateValue).slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(key) && !seen[key + ':' + out.length]) {
+      out.push(value);
+      seen[key + ':' + out.length] = true;
+    }
+  }
+  Object.keys(value).forEach(function(k) {
+    const child = value[k];
+    if (child && typeof child === 'object') garminCollectRecords_(child, out, seen);
+  });
+  return out;
+}
+
+function garminRecordDate_(record) {
+  const value = record && (record.calendarDate || record.date || record.measurementDate || record.startDate || record.summaryDate || record.calendarDay);
+  if (!value) return '';
+  const key = String(value).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : '';
+}
+
+function garminFindDeep_(value, candidates) {
+  if (!value || typeof value !== 'object') return null;
+  for (let i = 0; i < candidates.length; i++) {
+    const key = candidates[i];
+    if (Object.prototype.hasOwnProperty.call(value, key) && value[key] !== null && value[key] !== '') return value[key];
+  }
+  const keys = Object.keys(value);
+  for (let j = 0; j < keys.length; j++) {
+    const child = value[keys[j]];
+    if (child && typeof child === 'object') {
+      const found = garminFindDeep_(child, candidates);
+      if (found !== null && found !== undefined && found !== '') return found;
+    }
+  }
+  return null;
+}
+
+function garminNumber_(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'object') {
+    if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i--) {
+        const n = garminNumber_(value[i]);
+        if (n !== null) return n;
+      }
+      return null;
+    }
+    const preferred = ['value','score','overall','lastNight','average','avg','min','max'];
+    for (let i = 0; i < preferred.length; i++) {
+      if (value[preferred[i]] !== undefined) {
+        const n = garminNumber_(value[preferred[i]]);
+        if (n !== null) return n;
+      }
+    }
+    return null;
+  }
+  const n = Number(value);
+  return isFinite(n) ? n : null;
+}
+
+function garminSleepHours_(record) {
+  let value = garminFindDeep_(record, ['sleepTimeSeconds','sleepDurationSeconds','totalSleepSeconds','sleepDurationInSeconds','totalSleepDurationSeconds','sleepSeconds']);
+  let n = garminNumber_(value);
+  if (n !== null) return Math.round((n / 3600) * 100) / 100;
+  value = garminFindDeep_(record, ['sleepTimeMinutes','sleepDurationMinutes','totalSleepMinutes']);
+  n = garminNumber_(value);
+  if (n !== null) return Math.round((n / 60) * 100) / 100;
+  value = garminFindDeep_(record, ['sleepHours','sleepDurationHours','totalSleepHours']);
+  n = garminNumber_(value);
+  return n === null ? null : Math.round(n * 100) / 100;
+}
+
+function garminWeightPounds_(record) {
+  let v = garminFindDeep_(record, ['weightInPounds','weightLb','weightPounds']);
+  let n = garminNumber_(v);
+  if (n !== null) return Math.round(n * 10) / 10;
+  v = garminFindDeep_(record, ['weightInKilograms','weightKg']);
+  n = garminNumber_(v);
+  if (n !== null) return Math.round(n * 2.2046226218 * 10) / 10;
+  v = garminFindDeep_(record, ['weightInGrams']);
+  n = garminNumber_(v);
+  if (n !== null) return Math.round(n / 453.59237 * 10) / 10;
+  v = garminFindDeep_(record, ['weight']);
+  n = garminNumber_(v);
+  if (n === null) return null;
+  if (n > 1000) return Math.round(n / 453.59237 * 10) / 10;
+  if (n >= 30 && n <= 300) return Math.round(n * 2.2046226218 * 10) / 10;
+  return null;
+}
+
+function garminMergeRecords_(byDate, payload, metrics) {
+  const records = garminCollectRecords_(payload, [], {});
+  records.forEach(function(record) {
+    const date = garminRecordDate_(record);
+    if (!date) return;
+    if (!byDate[date]) byDate[date] = {};
+    Object.keys(metrics).forEach(function(field) {
+      let value = field === 'sleepHours' ? garminSleepHours_(record) :
+        field === 'weight' ? garminWeightPounds_(record) :
+        garminNumber_(garminFindDeep_(record, metrics[field]));
+      if (value !== null && value !== undefined) byDate[date][field] = value;
+    });
+  });
+}
+
+function garminRangeDate_(daysBack) {
+  const d = new Date();
+  d.setDate(d.getDate() - Number(daysBack || 0));
+  return Utilities.formatDate(d, APP.TZ, 'yyyy-MM-dd');
+}
+
+function garminEnsureSyncTrigger_() {
+  const existing = ScriptApp.getProjectTriggers().some(function(trigger) {
+    return trigger.getHandlerFunction() === 'syncGarminHealth';
+  });
+  if (!existing) {
+    ScriptApp.newTrigger('syncGarminHealth').timeBased().everyHours(6).create();
+  }
+  PropertiesService.getScriptProperties().setProperty('GARMIN_TRIGGER_STATUS', 'installed');
+  PropertiesService.getScriptProperties().deleteProperty('GARMIN_TRIGGER_ERROR');
+  return true;
+}
+
+function authorizeGarminIntegration() {
+  // Run once from the Apps Script editor to grant external-request and trigger permissions.
+  UrlFetchApp.fetch('https://personal.connectapi.garmin.com', { muteHttpExceptions: true });
+  garminEnsureSyncTrigger_();
+  return 'Garmin integration permissions granted and six-hour sync trigger installed.';
+}
+
+function syncGarminHealth() {
+  return syncGarminHealth_();
+}
+
+function syncGarminHealth_() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return { ok: false, message: 'A Garmin sync is already running.' };
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('GARMIN_LAST_SYNC_STATUS', 'running');
+  props.deleteProperty('GARMIN_LAST_ERROR');
+  try {
+    const endDate = garminRangeDate_(0);
+    const startDate = garminRangeDate_(30);
+    const byDate = {};
+    const warnings = [];
+    const requests = [
+      { name:'daily', path:'/usersummary-service/v2/dailysummaries', params:{startDate:startDate,endDate:endDate}, metrics:{
+        steps:['steps','totalSteps','stepCount'],
+        restingHR:['restingHeartRateInBeatsPerMinute','restingHeartRate','restingHr'],
+        stress:['averageStressLevel','averageStressLevelOfDay','avgStressLevel','stressLevel'],
+        bodyBattery:['bodyBatteryHighestValue','highestBodyBatteryValue','bodyBatteryAtWakeTime']
+      }},
+      { name:'sleep', path:'/sleep-service/sleep/dailySleepSummariesByDate', params:{startDate:startDate,endDate:endDate}, metrics:{
+        sleepHours:['sleepTimeSeconds','sleepDurationSeconds','totalSleepSeconds','sleepDurationInSeconds','totalSleepDurationSeconds','sleepSeconds','sleepTimeMinutes','sleepDurationMinutes','totalSleepMinutes','sleepHours','sleepDurationHours','totalSleepHours'],
+        sleepScore:['sleepScore','overallSleepScore','sleepScoreValue']
+      }},
+      { name:'hrv', path:'/hrv-service/hrv/daily/' + startDate + '/' + endDate, params:{}, metrics:{
+        hrv:['lastNight','lastNightAvg','lastNightAverage','avgHrv','averageHrv','hrvValue','hrv']
+      }},
+      { name:'bodyBattery', path:'/wellness-service/wellness/bodyBattery/reports/daily', params:{startDate:startDate,endDate:endDate}, metrics:{
+        bodyBattery:['bodyBatteryHighestValue','highestBodyBatteryValue','bodyBatteryAtWakeTime','highestValue','maxBodyBattery','max']
+      }},
+      { name:'weight', path:'/weight-service/weight/range/' + startDate + '/' + endDate, params:{includeAll:'true'}, metrics:{
+        weight:['weightInPounds','weightLb','weightPounds','weightInKilograms','weightKg','weightInGrams','weight']
+      }}
+    ];
+    requests.forEach(function(request) {
+      try {
+        const payload = garminApiGet_(request.path, request.params, false);
+        garminMergeRecords_(byDate, payload, request.metrics);
+      } catch (err) {
+        warnings.push(request.name + ': ' + String(err && err.message ? err.message : err));
+      }
+    });
+
+    const dates = Object.keys(byDate).sort();
+    if (!dates.length) throw new Error('Garmin connected, but no dated health records were returned. ' + warnings.join(' | '));
+    const ss = dashboardSpreadsheet_();
+    const sh = ss.getSheetByName('Health');
+    if (!sh) throw new Error('Health sheet is missing.');
+    const lastCol = sh.getLastColumn();
+    const headers = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+    const col = {};
+    headers.forEach(function(header, i) { col[header] = i; });
+    const lastRow = sh.getLastRow();
+    const existing = lastRow >= 2 ? sh.getRange(2, 1, lastRow - 1, lastCol).getValues() : [];
+    const rowByDate = {};
+    existing.forEach(function(row, i) {
+      const date = dateKeySheet_(row[col['Date']]);
+      const type = String(row[col['Type']] || '');
+      if (date && (!type || type === 'Daily Check-In') && !rowByDate[date]) rowByDate[date] = i + 2;
+    });
+
+    const fieldToColumn = {
+      weight:'Morning Weight (lb)', sleepHours:'Sleep Hours', sleepScore:'Sleep Score',
+      hrv:'HRV', restingHR:'Resting HR', steps:'Steps', bodyBattery:'Body Battery', stress:'Stress'
+    };
+    let rowsUpdated = 0;
+    let fieldsUpdated = 0;
+    dates.forEach(function(date) {
+      const data = byDate[date];
+      const rowNumber = rowByDate[date] || (sh.getLastRow() + 1);
+      let row;
+      if (rowByDate[date]) {
+        row = sh.getRange(rowNumber, 1, 1, lastCol).getValues()[0];
+      } else {
+        row = headers.map(function() { return ''; });
+        row[col['ID']] = Utilities.getUuid();
+        row[col['Date']] = date;
+        row[col['Type']] = 'Daily Check-In';
+      }
+      let changed = false;
+      Object.keys(fieldToColumn).forEach(function(field) {
+        const header = fieldToColumn[field];
+        const value = data[field];
+        if (value === null || value === undefined || col[header] === undefined) return;
+        row[col[header]] = value;
+        changed = true;
+        fieldsUpdated++;
+      });
+      if (changed) {
+        sh.getRange(rowNumber, 1, 1, lastCol).setValues([row]);
+        rowByDate[date] = rowNumber;
+        rowsUpdated++;
+      }
+    });
+
+    const now = new Date();
+    props.setProperty('GARMIN_LAST_SYNC_AT', now.toISOString());
+    props.setProperty('GARMIN_LAST_SYNC_STATUS', warnings.length ? 'success_with_warnings' : 'success');
+    if (warnings.length) props.setProperty('GARMIN_LAST_ERROR', warnings.join(' | ').slice(0, 900));
+    else props.deleteProperty('GARMIN_LAST_ERROR');
+    props.setProperty('GARMIN_LAST_SYNC_ROWS', String(rowsUpdated));
+    props.setProperty('GARMIN_LAST_SYNC_FIELDS', String(fieldsUpdated));
+    return { ok:true, rowsUpdated:rowsUpdated, fieldsUpdated:fieldsUpdated, startDate:startDate, endDate:endDate, warnings:warnings, status:getGarminStatus_() };
+  } catch (err) {
+    props.setProperty('GARMIN_LAST_SYNC_STATUS', 'error');
+    props.setProperty('GARMIN_LAST_ERROR', String(err && err.message ? err.message : err).slice(0, 900));
+    throw err;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getGarminStatus_() {
+  const props = PropertiesService.getScriptProperties();
+  return {
+    configured: !!props.getProperty('GARMIN_PERSONAL_API_KEY'),
+    keyStatus: props.getProperty('GARMIN_KEY_STATUS') || 'not_configured',
+    tokenExpiresAt: props.getProperty('GARMIN_ACCESS_TOKEN_EXPIRES_AT') || null,
+    lastSyncAt: props.getProperty('GARMIN_LAST_SYNC_AT') || null,
+    lastSyncStatus: props.getProperty('GARMIN_LAST_SYNC_STATUS') || 'never',
+    lastSyncError: props.getProperty('GARMIN_LAST_ERROR') || '',
+    triggerStatus: props.getProperty('GARMIN_TRIGGER_STATUS') || 'not_installed',
+    triggerError: props.getProperty('GARMIN_TRIGGER_ERROR') || '',
+    rowsUpdated: Number(props.getProperty('GARMIN_LAST_SYNC_ROWS') || 0),
+    fieldsUpdated: Number(props.getProperty('GARMIN_LAST_SYNC_FIELDS') || 0)
+  };
 }
 
 function getDashboardBridgeHtml_() {
