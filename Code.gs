@@ -79,6 +79,9 @@ function dashboardApiDispatch_(method, args, allowWrite) {
     case 'syncGarminHealth':
       if (!allowWrite) throw new Error('Write method requires POST.');
       return syncGarminHealth_();
+    case 'startGarminYearBackfill':
+      if (!allowWrite) throw new Error('Write method requires POST.');
+      return startGarminYearBackfill();
     case 'toggleHabit':
       if (!allowWrite) throw new Error('Write method requires POST.');
       return toggleHabit(args[0]);
@@ -348,7 +351,9 @@ function garminMergeRecords_(byDate, payload, metrics) {
       let value = field === 'sleepHours' ? garminSleepHours_(record) :
         field === 'weight' ? garminWeightPounds_(record) :
         garminNumber_(garminFindDeep_(record, metrics[field]));
-      if (value !== null && value !== undefined) byDate[date][field] = value;
+      if (value !== null && value !== undefined && (field !== 'stress' || (value >= 0 && value <= 100))) {
+        byDate[date][field] = value;
+      }
     });
   });
 }
@@ -449,14 +454,19 @@ function syncGarminHealth() {
 }
 
 function syncGarminHealth_() {
+  return garminImportRange_(garminRangeDate_(30), garminRangeDate_(0), false);
+}
+
+function garminImportRange_(startDate, endDate, allowEmpty) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return { ok: false, message: 'A Garmin sync is already running.' };
   const props = PropertiesService.getScriptProperties();
   props.setProperty('GARMIN_LAST_SYNC_STATUS', 'running');
   props.deleteProperty('GARMIN_LAST_ERROR');
   try {
-    const endDate = garminRangeDate_(0);
-    const startDate = garminRangeDate_(30);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate > endDate) {
+      throw new Error('Invalid Garmin import date range.');
+    }
     const byDate = {};
     const warnings = [];
     const requests = [
@@ -515,7 +525,10 @@ function syncGarminHealth_() {
       }
     });
     const dates = Object.keys(byDate).sort();
-    if (!dates.length) throw new Error('Garmin connected, but no dated health records were returned. ' + warnings.join(' | '));
+    if (!dates.length && !allowEmpty) throw new Error('Garmin connected, but no dated health records were returned. ' + warnings.join(' | '));
+    if (warnings.some(function(w) { return /HTTP (429|5\d\d)/.test(w); })) {
+      throw new Error('Garmin temporarily unavailable or rate-limited. ' + warnings.join(' | '));
+    }
     const ss = dashboardSpreadsheet_();
     const sh = ss.getSheetByName('Health');
     if (!sh) throw new Error('Health sheet is missing.');
@@ -583,6 +596,97 @@ function syncGarminHealth_() {
   }
 }
 
+/**
+ * One-time historical import. Run startGarminYearBackfill() once in the Apps
+ * Script editor, or initiate it through the dashboard Garmin setup page.
+ * A 10-minute time trigger continues the import in 14-day batches.
+ * Existing six-hour Garmin sync is unchanged.
+ * Never stores credentials or data in GitHub.
+ */
+function garminEnsureBackfillTrigger_() {
+  const handler = 'garminBackfillStep';
+  const present = ScriptApp.getProjectTriggers().some(function(t) {
+    return t.getHandlerFunction() === handler;
+  });
+  if (!present) ScriptApp.newTrigger(handler).timeBased().everyMinutes(10).create();
+}
+
+function garminRemoveBackfillTrigger_() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'garminBackfillStep') ScriptApp.deleteTrigger(t);
+  });
+}
+
+function startGarminYearBackfill() {
+  const props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('GARMIN_PERSONAL_API_KEY')) {
+    throw new Error('Connect a Garmin Personal API key before starting the backfill.');
+  }
+  const status = props.getProperty('GARMIN_BACKFILL_STATUS') || '';
+  if (status === 'running') return getGarminStatus_().backfill;
+  if (status === 'complete') return getGarminStatus_().backfill;
+  if (!props.getProperty('GARMIN_BACKFILL_NEXT_DATE')) {
+    const first = garminRangeDate_(365);
+    const end = garminIsoDateAdd_(garminRangeDate_(30), -1);
+    props.setProperties({
+      GARMIN_BACKFILL_START_DATE: first,
+      GARMIN_BACKFILL_END_DATE: end,
+      GARMIN_BACKFILL_NEXT_DATE: first,
+      GARMIN_BACKFILL_ROWS_TOTAL: '0',
+      GARMIN_BACKFILL_FIELDS_TOTAL: '0',
+      GARMIN_BACKFILL_DAYS_DONE: '0'
+    });
+  }
+  props.setProperty('GARMIN_BACKFILL_STATUS','running');
+  props.deleteProperty('GARMIN_BACKFILL_ERROR');
+  garminEnsureBackfillTrigger_();
+  return garminBackfillStep();
+}
+
+function garminBackfillStep() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('GARMIN_BACKFILL_STATUS') !== 'running') return getGarminStatus_().backfill;
+  const next = props.getProperty('GARMIN_BACKFILL_NEXT_DATE') || '';
+  const last = props.getProperty('GARMIN_BACKFILL_END_DATE') || '';
+  if (!next || !last) throw new Error('Garmin historical import state missing.');
+  if (next > last) {
+    props.setProperty('GARMIN_BACKFILL_STATUS','complete');
+    props.setProperty('GARMIN_BACKFILL_COMPLETED_AT',new Date().toISOString());
+    garminRemoveBackfillTrigger_();
+    return getGarminStatus_().backfill;
+  }
+
+  const candidate = garminIsoDateAdd_(next, 13);
+  const end = candidate < last ? candidate : last;
+  try {
+    const result = garminImportRange_(next, end, true);
+    if (result && result.ok === false) return getGarminStatus_().backfill;
+    const following = garminIsoDateAdd_(end, 1);
+    const start = props.getProperty('GARMIN_BACKFILL_START_DATE');
+    const daysDone = Math.round((Date.parse(end+'T12:00:00Z')-Date.parse(start+'T12:00:00Z')) / 86400000)+1;
+    props.setProperties({
+      GARMIN_BACKFILL_NEXT_DATE: following,
+      GARMIN_BACKFILL_DAYS_DONE: String(daysDone),
+      GARMIN_BACKFILL_ROWS_TOTAL: String(Number(props.getProperty('GARMIN_BACKFILL_ROWS_TOTAL')||0)+Number(result.rowsUpdated||0)),
+      GARMIN_BACKFILL_FIELDS_TOTAL: String(Number(props.getProperty('GARMIN_BACKFILL_FIELDS_TOTAL')||0)+Number(result.fieldsUpdated||0)),
+      GARMIN_BACKFILL_LAST_WINDOW: next+' to '+end,
+      GARMIN_BACKFILL_LAST_RUN_AT: new Date().toISOString()
+    });
+    if (following > last) {
+      props.setProperty('GARMIN_BACKFILL_STATUS','complete');
+      props.setProperty('GARMIN_BACKFILL_COMPLETED_AT',new Date().toISOString());
+      garminRemoveBackfillTrigger_();
+    }
+    return getGarminStatus_().backfill;
+  } catch(err) {
+    // Stop on errors instead of silently advancing past missed Garmin dates.
+    props.setProperty('GARMIN_BACKFILL_STATUS','error');
+    props.setProperty('GARMIN_BACKFILL_ERROR', String(err&&err.message||err).slice(0,600));
+    garminRemoveBackfillTrigger_();
+    throw err;
+  }
+}
+
 function getGarminStatus_() {
   const props = PropertiesService.getScriptProperties();
   return {
@@ -595,7 +699,18 @@ function getGarminStatus_() {
     triggerStatus: props.getProperty('GARMIN_TRIGGER_STATUS') || 'not_installed',
     triggerError: props.getProperty('GARMIN_TRIGGER_ERROR') || '',
     rowsUpdated: Number(props.getProperty('GARMIN_LAST_SYNC_ROWS') || 0),
-    fieldsUpdated: Number(props.getProperty('GARMIN_LAST_SYNC_FIELDS') || 0)
+    fieldsUpdated: Number(props.getProperty('GARMIN_LAST_SYNC_FIELDS') || 0),
+    backfill: {
+      status: props.getProperty('GARMIN_BACKFILL_STATUS') || 'not_started',
+      startDate: props.getProperty('GARMIN_BACKFILL_START_DATE') || null,
+      endDate: props.getProperty('GARMIN_BACKFILL_END_DATE') || null,
+      nextDate: props.getProperty('GARMIN_BACKFILL_NEXT_DATE') || null,
+      lastWindow: props.getProperty('GARMIN_BACKFILL_LAST_WINDOW') || null,
+      daysDone: Number(props.getProperty('GARMIN_BACKFILL_DAYS_DONE') || 0),
+      rowsUpdated: Number(props.getProperty('GARMIN_BACKFILL_ROWS_TOTAL') || 0),
+      fieldsUpdated: Number(props.getProperty('GARMIN_BACKFILL_FIELDS_TOTAL') || 0),
+      error: props.getProperty('GARMIN_BACKFILL_ERROR') || ''
+    }
   };
 }
 
