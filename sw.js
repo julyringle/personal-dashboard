@@ -1,4 +1,4 @@
-const CACHE='personal-dashboard-shell-v16';
+const CACHE='personal-dashboard-shell-v17';
 const SHELL=[
   './',
   './index.html',
@@ -9,7 +9,8 @@ const SHELL=[
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@01ea40e3eb367dfa03f3d4150f05fa9e79bebaee/section-backgrounds.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@0c9950df33d55ab6b7786e7f4a6a1909913ff152/standalone.css',
   'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@41ed16f7d50f707fe359e34e9b94de237ca9fea6/standalone.js',
-  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@e673174c4cf3b1d74268c23ec5d24e0b2e0ebba6/app.js'
+  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@e673174c4cf3b1d74268c23ec5d24e0b2e0ebba6/app.js',
+  'https://cdn.jsdelivr.net/gh/julyringle/personal-dashboard@4801dac865a9323b15a326426df35a046d7c56c9/calendar-diagnostic.js'
 ];
 
 self.addEventListener('install',event=>{
