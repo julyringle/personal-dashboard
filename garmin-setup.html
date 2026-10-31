@@ -37,7 +37,8 @@ hr{border:0;border-top:1px solid var(--line);margin:24px 0}
   <div class="status" id="status">Checking this browser's dashboard connection…</div>
 
   <hr>
-  <button id="syncNow" class="secondary" disabled>RUN FIRST 30-DAY SYNC</button>
+  <button id="syncNow" class="secondary" disabled>RUN 30-DAY SYNC</button>
+  <button id="backfillYear" class="secondary" disabled>BACKFILL THE PAST YEAR</button>
   <div class="note">After a successful setup, the backend will refresh Garmin data every 6 hours. Your food/macros columns are left untouched. Keep this page private and never paste the Garmin key into chat.</div>
 </main>
 <script>
@@ -46,6 +47,7 @@ hr{border:0;border-top:1px solid var(--line);margin:24px 0}
   const statusEl=document.getElementById('status');
   const saveBtn=document.getElementById('saveKey');
   const syncBtn=document.getElementById('syncNow');
+  const yearBtn=document.getElementById('backfillYear');
   let cfg=null;
   function readConfig(){
     try{const x=JSON.parse(localStorage.getItem(CONFIG_KEY)||'null');if(x&&x.key&&x.url)return x;}catch(e){}
@@ -78,10 +80,20 @@ hr{border:0;border-top:1px solid var(--line);margin:24px 0}
       'Rows updated: '+(s.rowsUpdated||0)+' · Fields updated: '+(s.fieldsUpdated||0),
       'Automatic schedule: '+(s.triggerStatus||'not installed')
     ];
+    if(s.backfill){
+      const b=s.backfill;
+      lines.push('Historical backfill: '+(b.status||'not started'));
+      if(b.daysDone)lines.push('History processed: '+b.daysDone+' days · '+(b.rowsUpdated||0)+' rows · '+(b.fieldsUpdated||0)+' fields');
+      if(b.nextDate&&b.status==='running')lines.push('Next history date: '+b.nextDate);
+      if(b.error)lines.push('History error: '+b.error);
+    }
     if(s.lastSyncError)lines.push('Details: '+s.lastSyncError);
     if(s.triggerError)lines.push('Schedule detail: '+s.triggerError);
     setStatus(lines.join('\n'));
     syncBtn.disabled=!(s.configured&&s.keyStatus==='connected');
+    const state=s.backfill&&s.backfill.status||'not_started';
+    yearBtn.disabled=!(s.configured&&s.keyStatus==='connected')||state==='running'||state==='complete';
+    yearBtn.textContent=state==='complete'?'YEAR BACKFILL COMPLETE':state==='running'?'YEAR BACKFILL RUNNING':state==='error'?'RETRY YEAR BACKFILL':'BACKFILL THE PAST YEAR';
   }
   async function refreshStatus(){const s=await jsonp('getGarminStatus',[]);displayStatus(s);return s;}
   cfg=readConfig();
@@ -114,7 +126,25 @@ hr{border:0;border-top:1px solid var(--line);margin:24px 0}
         setStatus('Sync finished with status: '+s.lastSyncStatus+'\n'+(s.lastSyncError||'Check the Apps Script execution log.'));
       }
     }catch(e){setStatus('Sync request failed: '+e.message);}
-    finally{syncBtn.disabled=false;syncBtn.textContent='RUN FIRST 30-DAY SYNC';}
+    finally{syncBtn.disabled=false;syncBtn.textContent='RUN 30-DAY SYNC';}
+  });
+  yearBtn.addEventListener('click',async()=>{
+    yearBtn.disabled=true;
+    yearBtn.textContent='STARTING YEAR BACKFILL…';
+    setStatus('Starting the historical Garmin import in small batches. Your regular six-hour sync continues.');
+    try{
+      await post('startGarminYearBackfill',[]);
+      const s=await refreshStatus();
+      if(s.backfill&&s.backfill.status==='error'){
+        setStatus('Historical import needs attention.\n\n'+statusEl.textContent);
+      }else{
+        setStatus('Historical import started. Reload this page later to check progress.\n\n'+statusEl.textContent);
+      }
+    }catch(e){
+      setStatus('Could not start the historical import: '+e.message);
+      yearBtn.disabled=false;
+      yearBtn.textContent='BACKFILL THE PAST YEAR';
+    }
   });
 })();
 </script>
